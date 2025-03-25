@@ -424,5 +424,143 @@ def test_gradient_numerical(channels, dtype, grad_value=True, grad_sampling_loc=
     )
 
 
+def test_export():
+    device = torch.device("cuda:0")
+
+    embed_dims = 3
+    num_levels = 2
+    num_heads = 3
+    num_points = 4
+    im2col_step = 2
+    msda = MultiScaleDeformableAttention(
+        embed_dims=embed_dims,
+        num_heads=num_heads,
+        num_levels=num_levels,
+        num_points=num_points,
+        im2col_step=im2col_step,
+        batch_first=False,
+    )
+    msda.init_weights()
+    num_query = 5
+    bs = 1
+    query = torch.rand(num_query, bs, embed_dims).to(device)
+    key = torch.rand(num_query, bs, embed_dims).to(device)
+    spatial_shapes = torch.Tensor([[2, 2], [1, 1]]).long().to(device)
+    level_start_index = torch.Tensor([0, 4]).long().to(device)
+    reference_points = torch.rand(bs, num_query, 2, 2).to(device)
+    msda.to(device)
+    with torch.inference_mode():
+        output = msda(
+            query,
+            key,
+            key,
+            reference_points=reference_points,
+            spatial_shapes=spatial_shapes,
+            level_start_index=level_start_index,
+        )
+
+        msda_export = torch.export.export(
+            msda,
+            args = (query,),
+            kwargs = {
+                "reference_points": reference_points,
+                "spatial_shapes": spatial_shapes,
+                "level_start_index": level_start_index,
+            }
+        )
+        msda_export_out = msda_export.module()(
+            query,
+            reference_points=reference_points,
+            spatial_shapes=spatial_shapes,
+            level_start_index=level_start_index,
+        )
+        torch.allclose(output, msda_export_out, rtol=1e-3, atol=1e-3)
+
+
+def test_benchmark_performance():
+    """Compare performance between CUDA and PyTorch implementations"""
+    import torch.utils.benchmark as benchmark
+    iterations = 100
+    
+    device = "cuda:0"
+    N, M, D = 1, 8, 64  # batch size, num_heads, embed_dim_per_head
+    Lq, L, P = 100, 4, 4  # num_queries, num_levels, num_points
+    shapes = torch.as_tensor([(64, 64), (32, 32), (16, 16), (8, 8)], dtype=torch.long)
+    level_start_index = torch.cat((shapes.new_zeros((1,)), shapes.prod(1).cumsum(0)[:-1]))
+    S = sum((H * W).item() for H, W in shapes)
+    im2col_step = 2
+    
+    print(f"\nPerformance benchmark: N={N}, M={M}, D={D}, Lq={Lq}, L={L}, P={P}")
+    
+    for dtype in [torch.float32, torch.float16]:
+        print(f"\nTesting with dtype: {dtype}")
+        
+        # Create input tensors
+        torch.manual_seed(42)
+        value = torch.rand(N, S, M, D, device=device, dtype=dtype)
+        sampling_locations = torch.rand(N, Lq, M, L, P, 2, device=device, dtype=dtype)
+        attention_weights = torch.rand(N, Lq, M, L, P, device=device, dtype=dtype)
+        attention_weights /= attention_weights.sum(-1, keepdim=True).sum(-2, keepdim=True)
+        
+        # Define the test functions
+        def run_cuda_impl():
+            return MultiScaleDeformableAttnFunction.apply(
+                value,
+                shapes.to(device),
+                level_start_index.to(device),
+                sampling_locations,
+                attention_weights,
+                im2col_step,
+            )
+        
+        def run_pytorch_impl():
+            return multi_scale_deformable_attn_pytorch(
+                value,
+                shapes.to(device),
+                sampling_locations, 
+                attention_weights
+            )
+        
+        # Warm-up run
+        _ = run_cuda_impl()
+        _ = run_pytorch_impl()
+        
+        # Benchmark
+        t0 = benchmark.Timer(
+            stmt="run_cuda_impl()",
+            globals={"run_cuda_impl": run_cuda_impl},
+            num_threads=1,
+        )
+        
+        t1 = benchmark.Timer(
+            stmt="run_pytorch_impl()",
+            globals={"run_pytorch_impl": run_pytorch_impl},
+            num_threads=1,
+        )
+        
+        print(f"CUDA implementation: {t0.timeit(iterations)}")
+        print(f"PyTorch implementation: {t1.timeit(iterations)}")
+        
+        # Verify outputs match
+        with torch.no_grad():
+            output_cuda = run_cuda_impl()
+            output_pytorch = run_pytorch_impl()
+            
+            max_abs_err = (output_cuda - output_pytorch).abs().max().item()
+            if output_pytorch.abs().max().item() > 0:
+                max_rel_err = ((output_cuda - output_pytorch).abs() / output_pytorch.abs().max()).max().item()
+            else:
+                max_rel_err = 0.0
+                
+            print(f"Max absolute error: {max_abs_err:.6e}")
+            print(f"Max relative error: {max_rel_err:.6e}")
+            
+            rtol = 1e-2 if dtype == torch.float16 else 1e-5
+            atol = 1e-3 if dtype == torch.float16 else 1e-6
+            
+            assert torch.allclose(output_cuda, output_pytorch, rtol=rtol, atol=atol), \
+                "CUDA and PyTorch implementation outputs differ significantly"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
