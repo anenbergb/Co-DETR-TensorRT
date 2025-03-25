@@ -12,12 +12,9 @@ setup(
     python_requires=">=3.10",
     packages=find_packages(),
     install_requires=[
+        "torch"
     ],
     extras_require={
-        "torch": [
-            "torch",
-            "torchvision",
-        ],
         "notebook": [
             "jupyter",
             "itkwidgets",
@@ -29,23 +26,31 @@ setup(
     },
     ext_modules=[
         CUDAExtension(
-            name="codetr.ops.ms_deform_attn",
+            name="codetr_cpp",
             sources=[
                 "codetr/ops/src/ms_deform_attn.cpp",
                 "codetr/ops/src/ms_deform_attn_cuda.cu",
             ],
             include_dirs=["codetr/ops/include"],
             extra_compile_args={
-                "cxx": ["-O2", "-g"],
+                "cxx": [
+                    "-O3",
+                    "-fdiagnostics-color=always",
+                    "-DPy_LIMITED_API=0x03090000",  # min CPython version 3.
+                ],
+            
                 "nvcc": [
-                    "-O2",
+                    "-O3",
                     "--use_fast_math",
                     # Explicitly targeting CUDA Compute Capability 8.9 (RTX 4090)
                     "-gencode=arch=compute_89,code=sm_89",  
                 ],
             },
-            extra_link_args=['-Wl,--no-as-needed', '-lcuda'],
+            # extra_link_args=['-Wl,--no-as-needed', '-lcuda'],
+            extra_link_args = [],
+            py_limited_api=True,
         ),
     ],
     cmdclass={"build_ext": BuildExtension},
+    options={"bdist_wheel": {"py_limited_api": "cp39"}},
 )

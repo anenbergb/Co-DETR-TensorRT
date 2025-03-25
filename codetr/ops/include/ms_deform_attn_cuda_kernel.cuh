@@ -4,6 +4,8 @@
 #include "common_cuda_helper.hpp"
 #include "pytorch_cuda_helper.hpp"
 
+namespace codetr_cpp {
+
 template <typename scalar_t>
 __device__ scalar_t ms_deform_attn_im2col_bilinear(
     const scalar_t *&bottom_data, const int &height, const int &width,
@@ -788,4 +790,7 @@ __global__ void ms_deformable_col2im_gpu_kernel_gm(
     }
   }
 }
+
+} // namespace codetr_cpp
+
 #endif  // DEFORM_ATTN_CUDA_KERNEL

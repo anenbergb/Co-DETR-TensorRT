@@ -2,13 +2,13 @@ import torch
 import pytest
 from torch.amp import autocast
 from torch.autograd import gradcheck
-from codetr.ops.ms_deform_attn import ms_deform_attn_forward, ms_deform_attn_backward
-from codetr.ops.multi_scale_deform_attn import (
-    multi_scale_deformable_attn_pytorch,
-    MultiScaleDeformableAttention,
-    MultiScaleDeformableAttnFunction,
-)
-
+# from codetr.ops.ms_deform_attn import ms_deform_attn_forward, ms_deform_attn_backward
+# from codetr.ops.ops import (
+#     multi_scale_deformable_attn_pytorch,
+#     MultiScaleDeformableAttention,
+#     MultiScaleDeformableAttnFunction,
+# )
+from codetr.ops import multi_scale_deformable_attention, multi_scale_deformable_attn_pytorch, MultiScaleDeformableAttention
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
 def test_ms_deform_attn_forward(dtype):
