@@ -1,7 +1,7 @@
 import torch
 import pytest
 from codetr.ops.ms_deform_attn import ms_deform_attn_forward, ms_deform_attn_backward
-from codetr.ops.multi_scale_deform_attn import multi_scale_deformable_attn_pytorch
+from codetr.ops.multi_scale_deform_attn import multi_scale_deformable_attn_pytorch, MultiScaleDeformableAttention
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
@@ -17,9 +17,15 @@ def test_ms_deform_attn_forward(dtype):
     device = "cuda:0"
 
     # Create random input tensors
-    spatial_shapes = torch.tensor([[height, width], [height // 2, width // 2], [height // 4, width // 4]], device=device, dtype=torch.int64)
-    level_start_index = torch.tensor([0, height * width, height * width + (height // 2) * (width // 2)], device=device, dtype=torch.int64)
-    value = torch.rand(batch_size, sum([h * w for h, w in spatial_shapes]), num_heads, embed_dim, device=device, dtype=dtype)
+    spatial_shapes = torch.tensor(
+        [[height, width], [height // 2, width // 2], [height // 4, width // 4]], device=device, dtype=torch.int64
+    )
+    level_start_index = torch.tensor(
+        [0, height * width, height * width + (height // 2) * (width // 2)], device=device, dtype=torch.int64
+    )
+    value = torch.rand(
+        batch_size, sum([h * w for h, w in spatial_shapes]), num_heads, embed_dim, device=device, dtype=dtype
+    )
     sampling_loc = torch.rand(batch_size, num_queries, num_heads, num_levels, num_points, 2, device=device, dtype=dtype)
     attn_weight = torch.rand(batch_size, num_queries, num_heads, num_levels, num_points, device=device, dtype=dtype)
     im2col_step = 2
@@ -56,9 +62,15 @@ def test_ms_deform_attn_backward(dtype):
     device = "cuda:0"
 
     # Create random input tensors
-    spatial_shapes = torch.tensor([[height, width], [height // 2, width // 2], [height // 4, width // 4]], device=device, dtype=torch.int64)
-    level_start_index = torch.tensor([0, height * width, height * width + (height // 2) * (width // 2)], device=device, dtype=torch.int64)
-    value = torch.rand(batch_size, sum([h * w for h, w in spatial_shapes]), num_heads, embed_dim, device=device, dtype=dtype)
+    spatial_shapes = torch.tensor(
+        [[height, width], [height // 2, width // 2], [height // 4, width // 4]], device=device, dtype=torch.int64
+    )
+    level_start_index = torch.tensor(
+        [0, height * width, height * width + (height // 2) * (width // 2)], device=device, dtype=torch.int64
+    )
+    value = torch.rand(
+        batch_size, sum([h * w for h, w in spatial_shapes]), num_heads, embed_dim, device=device, dtype=dtype
+    )
     sampling_loc = torch.rand(batch_size, num_queries, num_heads, num_levels, num_points, 2, device=device, dtype=dtype)
     attn_weight = torch.rand(batch_size, num_queries, num_heads, num_levels, num_points, device=device, dtype=dtype)
     grad_output = torch.rand(batch_size, num_queries, num_heads * embed_dim, device=device, dtype=dtype)
@@ -92,6 +104,64 @@ def test_ms_deform_attn_backward(dtype):
     assert grad_value.device == torch.device(device)
     assert grad_sampling_loc.device == torch.device(device)
     assert grad_attn_weight.device == torch.device(device)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+def test_MultiScaleDeformableAttention(dtype):
+    # Define the input parameters
+    batch_size = 2
+    num_heads = 4
+    num_queries = 8
+    embed_dim = 16
+    num_levels = 3
+    num_points = 4
+    height, width = 32, 32
+    device = "cuda:0"
+    im2col_step = 2
+
+    # Create random input tensors
+    spatial_shapes = torch.tensor(
+        [[height, width], [height // 2, width // 2], [height // 4, width // 4]], device=device, dtype=torch.int64
+    )
+    level_start_index = torch.tensor(
+        [0, height * width, height * width + (height // 2) * (width // 2)], device=device, dtype=torch.int64
+    )
+
+    # Create query tensor with proper shape (batch_size, num_queries, embed_dim)
+    query = torch.rand(num_queries, batch_size, embed_dim, device=device, dtype=dtype)
+
+    # Create value tensor with proper shape
+    spatial_len = sum([h * w for h, w in spatial_shapes])
+    value = torch.rand(spatial_len, batch_size, embed_dim, device=device, dtype=dtype)
+
+    # Create reference points (needed for sampling_locations calculation)
+    # Shape: (batch_size, num_queries, num_levels, 2)
+    reference_points = torch.rand(batch_size, num_queries, num_levels, 2, device=device, dtype=dtype)
+
+    # Create the MultiScaleDeformableAttention module
+    msda = (
+        MultiScaleDeformableAttention(embed_dim, num_heads, num_levels, num_points, im2col_step, batch_first=False)
+        .to(device)
+        .to(dtype)
+    )
+
+    # Run the forward function with correct arguments
+    output = msda(
+        query=query,
+        value=value,
+        reference_points=reference_points,
+        spatial_shapes=spatial_shapes,
+        level_start_index=level_start_index,
+    )
+
+    # Check the output shape
+    assert output.shape == (num_queries, batch_size, embed_dim)
+
+    # Check that the output is not all zeros
+    assert not torch.all(output == 0)
+
+    # Check that the output is on the correct device
+    assert output.device == torch.device(device)
 
 
 if __name__ == "__main__":
