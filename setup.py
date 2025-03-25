@@ -29,18 +29,19 @@ setup(
     },
     ext_modules=[
         CUDAExtension(
-            name="codetr.ops.ms_deformable_attn",
+            name="codetr.ops.ms_deform_attn",
             sources=[
-                "codetr/ops/csrc/ms_deformable_attn.cpp",
-                "codetr/ops/csrc/ms_deformable_attn_kernel.cu",
+                "codetr/ops/src/ms_deform_attn.cpp",
+                "codetr/ops/src/ms_deform_attn_cuda.cu",
             ],
+            include_dirs=["codetr/ops/include"],
             extra_compile_args={
                 "cxx": ["-O2", "-g"],
                 "nvcc": [
                     "-O2",
                     "--use_fast_math",
-                    "-gencode=arch=compute_89,code=sm_89",  # Explicitly targeting CUDA Compute Capability 8.9
-
+                    # Explicitly targeting CUDA Compute Capability 8.9 (RTX 4090)
+                    "-gencode=arch=compute_89,code=sm_89",  
                 ],
             },
             extra_link_args=['-Wl,--no-as-needed', '-lcuda'],
