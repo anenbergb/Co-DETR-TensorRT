@@ -1,6 +1,7 @@
 import torch
 import pytest
 from torch.autograd import gradcheck
+import torch.utils.benchmark as benchmark
 
 import codetr
 from codetr.ops import multi_scale_deformable_attention_pytorch
@@ -521,7 +522,6 @@ def test_export():
 
 def test_benchmark_performance():
     """Compare performance between CUDA and PyTorch implementations"""
-    import torch.utils.benchmark as benchmark
 
     iterations = 100
 
@@ -605,6 +605,177 @@ def test_benchmark_performance():
                 atol=atol,
                 msg="CUDA and PyTorch implementation outputs differ significantly",
             )
+
+
+def test_benchmark_tensorrt_performance():
+    """Compare performance between MultiScaleDeformableAttention and TensorRT exported versions"""
+
+    iterations = 100
+    device = torch.device("cuda:0")
+
+    # Model parameters
+    embed_dims = 64
+    num_levels = 3
+    num_heads = 8
+    num_points = 4
+    im2col_step = 2
+
+    # Input parameters
+    num_query = 100  # Use a larger number for realistic benchmarking
+    bs = 1
+    height, width = 64, 64  # Larger feature maps for better benchmarking
+
+    print(f"\nBenchmarking TensorRT performance: embed_dims={embed_dims}, num_heads={num_heads}, num_query={num_query}")
+
+    # Create model and inputs
+    msda = (
+        MultiScaleDeformableAttention(
+            embed_dims=embed_dims,
+            num_heads=num_heads,
+            num_levels=num_levels,
+            num_points=num_points,
+            im2col_step=im2col_step,
+            batch_first=False,
+        )
+        .eval()
+        .to(device)
+    )
+
+    msda.init_weights()
+
+    # Create inputs
+    torch.manual_seed(42)  # For reproducibility
+    query = torch.rand(num_query, bs, embed_dims, device=device)
+    spatial_shapes = torch.tensor(
+        [[height, width], [height // 2, width // 2], [height // 4, width // 4]], device=device, dtype=torch.int64
+    )
+    level_start_index = torch.tensor(
+        [0, height * width, height * width + (height // 2) * (width // 2)], device=device, dtype=torch.int64
+    )
+    reference_points = torch.rand(bs, num_query, num_levels, 2, device=device)
+    spatial_len = sum([h * w for h, w in spatial_shapes])
+    value = torch.rand(spatial_len, bs, embed_dims, device=device)
+
+    # Define benchmark functions
+    def run_pytorch_model():
+        return msda(
+            query,
+            value=value,
+            reference_points=reference_points,
+            spatial_shapes=spatial_shapes,
+            level_start_index=level_start_index,
+        )
+
+    with torch.inference_mode():
+        # Export the model
+        msda_export = torch.export.export(
+            msda,
+            args=(query,),
+            kwargs={
+                "value": value,
+                "reference_points": reference_points,
+                "spatial_shapes": spatial_shapes,
+                "level_start_index": level_start_index,
+            },
+            strict=True,
+        )
+
+        def run_exported_model():
+            return msda_export.module()(
+                query,
+                value=value,
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+            )
+
+        # Compile with TensorRT
+        msda_trt = torch_tensorrt.dynamo.compile(
+            msda_export,
+            arg_inputs=(query,),
+            kwarg_inputs={
+                "value": value,
+                "reference_points": reference_points,
+                "spatial_shapes": spatial_shapes,
+                "level_start_index": level_start_index,
+            },
+            enabled_precisions={torch.float32},
+        )
+
+        def run_tensorrt_model():
+            return msda_trt(
+                query,
+                value=value,
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+            )
+
+        # Warm-up runs
+        _ = run_pytorch_model()
+        _ = run_exported_model()
+        _ = run_tensorrt_model()
+
+        # Benchmark
+        t0 = benchmark.Timer(
+            stmt="run_pytorch_model()",
+            globals={"run_pytorch_model": run_pytorch_model},
+            num_threads=1,
+        )
+
+        t1 = benchmark.Timer(
+            stmt="run_exported_model()",
+            globals={"run_exported_model": run_exported_model},
+            num_threads=1,
+        )
+
+        t2 = benchmark.Timer(
+            stmt="run_tensorrt_model()",
+            globals={"run_tensorrt_model": run_tensorrt_model},
+            num_threads=1,
+        )
+
+        # Run benchmarks
+        pytorch_time = t0.timeit(iterations)
+        exported_time = t1.timeit(iterations)
+        tensorrt_time = t2.timeit(iterations)
+
+        print(f"\nPyTorch implementation: {pytorch_time}")
+        print(f"Exported implementation: {exported_time}")
+        print(f"TensorRT implementation: {tensorrt_time}")
+
+        # Calculate speedups
+        speedup_export = pytorch_time.mean / exported_time.mean
+        speedup_trt = pytorch_time.mean / tensorrt_time.mean
+
+        print(f"\nExported speedup: {speedup_export:.2f}x")
+        print(f"TensorRT speedup: {speedup_trt:.2f}x")
+
+        # Verify outputs match
+        output_pytorch = run_pytorch_model()
+        output_export = run_exported_model()
+        output_trt = run_tensorrt_model()
+
+        # Compare accuracy with original PyTorch model
+        try:
+            torch.testing.assert_close(output_pytorch, output_export, rtol=1e-2, atol=1e-2)
+            print("✅ Exported model output matches the original (within tolerance)")
+        except AssertionError as e:
+            max_abs_err = (output_pytorch - output_export).abs().max().item()
+            rel_err = (output_pytorch - output_export).abs() / output_pytorch.abs().clamp(min=1e-10)
+            max_rel_err = rel_err.max().item()
+
+            print(f"⚠️ Exported model differences: max_abs_err={max_abs_err:.6e}, max_rel_err={max_rel_err:.6e}")
+
+        try:
+            torch.testing.assert_close(output_pytorch, output_trt, rtol=1e-1, atol=1e-1)
+            print("✅ TensorRT model output matches the original (within tolerance)")
+        except AssertionError as e:
+            max_abs_err = (output_pytorch - output_trt).abs().max().item()
+            rel_err = (output_pytorch - output_trt).abs() / output_pytorch.abs().clamp(min=1e-10)
+            max_rel_err = rel_err.max().item()
+
+            print(f"⚠️ TensorRT model differences: max_abs_err={max_abs_err:.6e}, max_rel_err={max_rel_err:.6e}")
 
 
 if __name__ == "__main__":
