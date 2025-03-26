@@ -16,7 +16,7 @@ from mmcv.cnn.bricks.drop import build_dropout
 from mmcv.cnn.bricks.scale import LayerScale
 
 
-from codetr.ops import MultiScaleDeformableAttention
+from codetr.multi_scale_deformable_attention import MultiScaleDeformableAttention
 
 
 class AdaptivePadding(nn.Module):
