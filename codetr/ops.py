@@ -1,14 +1,14 @@
 import torch
 import torch.nn.functional as F
-__all__ = ["multi_scale_deformable_attention", "multi_scale_deformable_attn_pytorch"]
 
+__all__ = ["multi_scale_deformable_attention_pytorch"]
 
 
 # Registers a FakeTensor kernel (aka "meta kernel", "abstract impl")
 # that describes what the properties of the output Tensor are given
 # the properties of the input Tensor. The FakeTensor kernel is necessary
 # for the op to work performantly with torch.compile.
-@torch.library.register_fake("codetr::ms_deform_attn_forward")
+@torch.library.register_fake("codetr::multi_scale_deformable_attention")
 def _(value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2col_step):
 
     torch._check(value.dim() == 4)
@@ -39,42 +39,42 @@ def _(value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2co
     torch._check(attn_weight.shape[4] == num_points)
 
     embed_dims = dim_per_head * num_heads
-    return torch.empty((bs, num_queries, embed_dims), dtype=value.dtype, device=value.device)    
+    return torch.empty((bs, num_queries, embed_dims), dtype=value.dtype, device=value.device)
 
 
-def multi_scale_deformable_attention(
-    value: torch.Tensor,
-    spatial_shapes: torch.Tensor,
-    level_start_index: torch.Tensor,
-    sampling_loc: torch.Tensor,
-    attn_weight: torch.Tensor,
-    im2col_step: int,
-):
-    """
-        Args:
-            value (torch.Tensor): The value has shape
-                (bs, num_keys, mum_heads, embed_dims//num_heads)
-            spatial_shapes (torch.Tensor): Spatial shape of
-                each feature map, has shape (num_levels, 2),
-                last dimension 2 represent (h, w)
-            level_start_index (torch.Tensor): The start index of each level.
-                A tensor has shape ``(num_levels, )`` and can be represented
-            sampling_loc (torch.Tensor): The location of sampling points,
-                has shape
-                (bs ,num_queries, num_heads, num_levels, num_points, 2),
-                the last dimension 2 represent (x, y).
-            attn_weight (torch.Tensor): The weight of sampling points
-                used when calculate the attention, has shape
-                (bs ,num_queries, num_heads, num_levels, num_points),
-            im2col_step (int): The step used in image to column.
+# def multi_scale_deformable_attention(
+#     value: torch.Tensor,
+#     spatial_shapes: torch.Tensor,
+#     level_start_index: torch.Tensor,
+#     sampling_loc: torch.Tensor,
+#     attn_weight: torch.Tensor,
+#     im2col_step: int,
+# ):
+#     """
+#         Args:
+#             value (torch.Tensor): The value has shape
+#                 (bs, num_keys, mum_heads, embed_dims//num_heads)
+#             spatial_shapes (torch.Tensor): Spatial shape of
+#                 each feature map, has shape (num_levels, 2),
+#                 last dimension 2 represent (h, w)
+#             level_start_index (torch.Tensor): The start index of each level.
+#                 A tensor has shape ``(num_levels, )`` and can be represented
+#             sampling_loc (torch.Tensor): The location of sampling points,
+#                 has shape
+#                 (bs ,num_queries, num_heads, num_levels, num_points, 2),
+#                 the last dimension 2 represent (x, y).
+#             attn_weight (torch.Tensor): The weight of sampling points
+#                 used when calculate the attention, has shape
+#                 (bs ,num_queries, num_heads, num_levels, num_points),
+#             im2col_step (int): The step used in image to column.
 
-        Returns:
-            torch.Tensor: has shape (bs, num_queries, embed_dims)
-    """
-    return torch.ops.codetr.ms_deform_attn_forward.default(value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2col_step)
+#         Returns:
+#             torch.Tensor: has shape (bs, num_queries, embed_dims)
+#     """
+#     return torch.ops.codetr.ms_deform_attn_forward.default(value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2col_step)
 
 
-def multi_scale_deformable_attn_pytorch(
+def multi_scale_deformable_attention_pytorch(
     value: torch.Tensor,
     value_spatial_shapes: torch.Tensor,
     sampling_locations: torch.Tensor,
@@ -132,5 +132,3 @@ def multi_scale_deformable_attn_pytorch(
         .view(bs, num_heads * embed_dims, num_queries)
     )
     return output.transpose(1, 2).contiguous()
-
-

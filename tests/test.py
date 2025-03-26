@@ -36,7 +36,7 @@ im2col_step = 2
 
 # Run the forward function
 args = [value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2col_step]
-output = torch.ops.codetr.ms_deform_attn_forward(*args)
+output = torch.ops.codetr.multi_scale_deformable_attention(*args)
 
 # Check the output shape
 assert output.shape == (batch_size, num_queries, num_heads * embed_dim)
@@ -48,4 +48,4 @@ assert not torch.all(output == 0)
 assert output.device == torch.device(device)
 
 # Use opcheck to check for incorrect usage of operator registration APIs
-torch.library.opcheck(torch.ops.codetr.ms_deform_attn_forward.default, args)
+torch.library.opcheck(torch.ops.codetr.multi_scale_deformable_attention.default, args)

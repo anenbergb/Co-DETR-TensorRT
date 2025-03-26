@@ -6,6 +6,9 @@ import mmengine
 import torch
 import torch.nn as nn
 from mmengine.model import BaseModule, constant_init, xavier_init
+import codetr
+from codetr.ops import multi_scale_deformable_attention_pytorch
+
 
 class MultiScaleDeformableAttention(BaseModule):
     """An attention module used in Deformable-Detr.
@@ -199,11 +202,13 @@ class MultiScaleDeformableAttention(BaseModule):
 
         # Assume that cuda is available
         if value.is_cuda:
-            output = MultiScaleDeformableAttnFunction.apply(
+            output = torch.ops.codetr.multi_scale_deformable_attention(
                 value, spatial_shapes, level_start_index, sampling_locations, attention_weights, self.im2col_step
             )
         else:
-            output = multi_scale_deformable_attn_pytorch(value, spatial_shapes, sampling_locations, attention_weights)
+            output = multi_scale_deformable_attention_pytorch(
+                value, spatial_shapes, sampling_locations, attention_weights
+            )
 
         output = self.output_proj(output)
 
