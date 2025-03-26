@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from mmengine.model import BaseModule, constant_init, xavier_init
 
 # from torch.autograd.function import Function, once_differentiable
-
+# import codetr.ops._C  # Explicitly load the library
 
 __all__ = ["multi_scale_deformable_attention", "multi_scale_deformable_attn_pytorch", "MultiScaleDeformableAttention"]
 

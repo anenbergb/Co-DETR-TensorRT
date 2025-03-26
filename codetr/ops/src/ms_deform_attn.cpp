@@ -30,7 +30,7 @@ torch::Tensor ms_deform_attn_forward(const torch::Tensor &value,
                                      const torch::Tensor &level_start_index,
                                      const torch::Tensor &sampling_loc,
                                      const torch::Tensor &attn_weight,
-                                     const int im2col_step);
+                                     const int64_t im2col_step);
 
 // // CUDA backward declaration
 // void ms_deform_attn_backward(const torch::Tensor &value,
@@ -51,6 +51,7 @@ TORCH_LIBRARY(codetr_cpp, m) {
 }
 
 // Registers CUDA implementation for ms_deform_attn_forward
+// https://github.com/pytorch/pytorch/blob/main/aten/src/ATen/native/README.md#func
 TORCH_LIBRARY_IMPL(codetr_cpp, CUDA, m) {
   m.impl("ms_deform_attn_forward", &ms_deform_attn_forward);
 }

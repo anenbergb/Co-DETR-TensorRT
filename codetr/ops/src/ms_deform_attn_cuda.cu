@@ -202,7 +202,7 @@ at::Tensor ms_deform_attn_forward(const at::Tensor &value,
                                        const at::Tensor &level_start_index,
                                        const at::Tensor &sampling_loc,
                                        const at::Tensor &attn_weight,
-                                       const int im2col_step) {
+                                       const int64_t im2col_step) {
   AT_ASSERTM(value.is_contiguous(), "value tensor has to be contiguous");
   AT_ASSERTM(spatial_shapes.is_contiguous(),
              "spatial_shapes tensor has to be contiguous");
@@ -220,7 +220,7 @@ at::Tensor ms_deform_attn_forward(const at::Tensor &value,
   AT_ASSERTM(sampling_loc.is_cuda(), "sampling_loc must be a CUDA tensor");
   AT_ASSERTM(attn_weight.is_cuda(), "attn_weight must be a CUDA tensor");
 
-  const int batch = value.size(0);
+  const int64_t batch = value.size(0);
   const int spatial_size = value.size(1);
   const int num_heads = value.size(2);
   const int channels = value.size(3);

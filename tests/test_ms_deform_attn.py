@@ -37,7 +37,7 @@ def test_ms_deform_attn_forward(dtype):
     im2col_step = 2
 
     # Run the forward function
-    output = ms_deform_attn_forward(value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2col_step)
+    output = multi_scale_deformable_attention(value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2col_step)
 
     # Run the PyTorch implementation
     output_pytorch = multi_scale_deformable_attn_pytorch(value, spatial_shapes, sampling_loc, attn_weight)
