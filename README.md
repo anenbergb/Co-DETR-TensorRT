@@ -11,3 +11,10 @@ pip install --no-build-isolation .
 References
 - https://pytorch.org/tutorials/advanced/cpp_custom_ops.html#cpp-custom-ops-tutorial
 - https://github.com/pytorch/vision/tree/main/torchvision/csrc
+
+
+# Tests
+
+```
+pytest tests/test_multi_scale_deformable_attention.py -s
+```
