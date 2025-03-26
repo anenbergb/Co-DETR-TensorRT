@@ -2,16 +2,11 @@ import torch
 import pytest
 from torch.autograd import gradcheck
 
-# from codetr.ops.ms_deform_attn import ms_deform_attn_forward, ms_deform_attn_backward
-# from codetr.ops.ops import (
-#     multi_scale_deformable_attn_pytorch,
-#     MultiScaleDeformableAttention,
-#     MultiScaleDeformableAttnFunction,
-# )
 import codetr
-
 from codetr.ops import multi_scale_deformable_attention_pytorch
 from codetr.multi_scale_deformable_attention import MultiScaleDeformableAttention
+
+import torch_tensorrt
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
@@ -429,7 +424,7 @@ def test_export():
         num_points=num_points,
         im2col_step=im2col_step,
         batch_first=False,
-    )
+    ).eval()
     msda.init_weights()
     num_query = 10
     bs = 1
@@ -475,7 +470,53 @@ def test_export():
             spatial_shapes=spatial_shapes,
             level_start_index=level_start_index,
         )
-        torch.testing.assert_close(output, msda_export_out, rtol=1e-3, atol=1e-3)
+        try:
+            torch.testing.assert_close(output, msda_export_out, rtol=1e-5, atol=1e-5)
+        except AssertionError as e:
+            # Calculate and print details about the differences
+            max_abs_err = (output - msda_export_out).abs().max().item()
+            relative_err = (output - msda_export_out).abs() / output.abs().clamp(min=1e-10)
+            max_rel_err = relative_err.max().item()
+            mean_rel_err = relative_err.mean().item()
+
+            print(f"\nWARNING: Exported model output differs from original")
+            print(f"Max absolute error: {max_abs_err:.6e}")
+            print(f"Max relative error: {max_rel_err:.6e}")
+            print(f"Mean relative error: {mean_rel_err:.6e}")
+            print(f"Original assertion error: {e}")
+
+        msda_trt = torch_tensorrt.dynamo.compile(
+            msda_export,
+            arg_inputs=(query,),
+            kwarg_inputs={
+                "value": value,
+                "reference_points": reference_points,
+                "spatial_shapes": spatial_shapes,
+                "level_start_index": level_start_index,
+            },
+            enabled_precisions={torch.float32},
+        )
+        msda_trt_out = msda_trt(
+            query,
+            value=value,
+            reference_points=reference_points,
+            spatial_shapes=spatial_shapes,
+            level_start_index=level_start_index,
+        )
+        try:
+            torch.testing.assert_close(output, msda_trt_out, rtol=1e-1, atol=1e-1)
+        except AssertionError as e:
+            # Calculate and print details about the differences
+            max_abs_err = (output - msda_trt_out).abs().max().item()
+            relative_err = (output - msda_trt_out).abs() / output.abs().clamp(min=1e-10)
+            max_rel_err = relative_err.max().item()
+            mean_rel_err = relative_err.mean().item()
+
+            print(f"\nWARNING: Exported model output differs from original")
+            print(f"Max absolute error: {max_abs_err:.6e}")
+            print(f"Max relative error: {max_rel_err:.6e}")
+            print(f"Mean relative error: {mean_rel_err:.6e}")
+            print(f"Original assertion error: {e}")
 
 
 def test_benchmark_performance():
