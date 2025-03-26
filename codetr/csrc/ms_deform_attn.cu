@@ -1,12 +1,14 @@
+#include <torch/library.h>
 #include <torch/extension.h>
+#include <torch/all.h>
 
-#include <ATen/ATen.h>
-#include <ATen/cuda/CUDAContext.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
 
-#include <THC/THCAtomics.cuh>
+#include <ATen/ATen.h>
+#include <ATen/cuda/CUDAContext.h>
 #include <ATen/cuda/CUDAApplyUtils.cuh>
+#include <THC/THCAtomics.cuh>
 
 
 #define THREADS_PER_BLOCK 512
@@ -14,7 +16,7 @@
   for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); \
        i += blockDim.x * gridDim.x)
 
-namespace codetr_cpp {
+namespace codetr {
 
 inline int GET_BLOCKS(const int N, const int num_threads = THREADS_PER_BLOCK) {
   int optimal_block_num = (N + num_threads - 1) / num_threads;
@@ -1065,10 +1067,15 @@ at::Tensor ms_deform_attn_forward(const at::Tensor &value,
   return output;
 }
 
+
+TORCH_LIBRARY(codetr, m) {
+  m.def("ms_deform_attn_forward(Tensor value, Tensor spatial_shapes, Tensor level_start_index, Tensor sampling_loc, Tensor attn_weight, int im2col_step) -> Tensor");
+}
+
 // Registers CUDA implementation for ms_deform_attn_forward
 // https://github.com/pytorch/pytorch/blob/main/aten/src/ATen/native/README.md#func
-TORCH_LIBRARY_IMPL(codetr_cpp, CUDA, m) {
+TORCH_LIBRARY_IMPL(codetr, CUDA, m) {
   m.impl("ms_deform_attn_forward", &ms_deform_attn_forward);
 }
 
-}  // namespace codetr_cpp
+}  // namespace codetr

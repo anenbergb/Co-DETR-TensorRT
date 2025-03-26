@@ -1,14 +1,6 @@
-import math
-import warnings
-from typing import Optional
-
-import mmengine
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from mmengine.model import BaseModule, constant_init, xavier_init
-
-__all__ = ["multi_scale_deformable_attention", "multi_scale_deformable_attn_pytorch"] # "MultiScaleDeformableAttention"]
+__all__ = ["multi_scale_deformable_attention", "multi_scale_deformable_attn_pytorch"]
 
 
 
@@ -16,7 +8,7 @@ __all__ = ["multi_scale_deformable_attention", "multi_scale_deformable_attn_pyto
 # that describes what the properties of the output Tensor are given
 # the properties of the input Tensor. The FakeTensor kernel is necessary
 # for the op to work performantly with torch.compile.
-@torch.library.register_fake("codetr_cpp::ms_deform_attn_forward")
+@torch.library.register_fake("codetr::ms_deform_attn_forward")
 def _(value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2col_step):
 
     torch._check(value.dim() == 4)
@@ -79,7 +71,7 @@ def multi_scale_deformable_attention(
         Returns:
             torch.Tensor: has shape (bs, num_queries, embed_dims)
     """
-    return torch.ops.codetr_cpp.ms_deform_attn_forward.default(value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2col_step)
+    return torch.ops.codetr.ms_deform_attn_forward.default(value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2col_step)
 
 
 def multi_scale_deformable_attn_pytorch(
@@ -140,3 +132,5 @@ def multi_scale_deformable_attn_pytorch(
         .view(bs, num_heads * embed_dims, num_queries)
     )
     return output.transpose(1, 2).contiguous()
+
+

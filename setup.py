@@ -5,7 +5,7 @@ from torch.utils.cpp_extension import CUDAExtension, BuildExtension
 
 setup(
     name="codetr",
-    version="1.0.0",
+    version="1.0.1",
     url="https://github.com/anenbergb/Co-DETR-TensorRT",
     author="Bryan Anenberg",
     author_email="anenbergb@gmail.com",
@@ -27,13 +27,10 @@ setup(
     },
     ext_modules=[
         CUDAExtension(
-            name="codetr.ops._C",
+            name="codetr._C",
             sources=[
-                "codetr/ops/src/ms_deform_attn.cpp",
-                "codetr/ops/src/ms_deform_attn_cuda.cu",
+                "codetr/csrc/ms_deform_attn.cu",
             ],
-            # include_dirs=[os.path.join(os.path.dirname(os.path.abspath(__file__)), "codetr/ops/include")],
-            include_dirs=[os.path.abspath("codetr/ops/include")],
             extra_compile_args={
                 "cxx": [
                     # "-O3",
@@ -58,8 +55,9 @@ setup(
             py_limited_api=True,
         ),
     ],
-    cmdclass={"build_ext": BuildExtension},
+    cmdclass={"build_ext": BuildExtension.with_options(no_python_abi_suffix=True)},
     options={"bdist_wheel": {"py_limited_api": "cp39"}},
+    include_package_data=True,
 )
 
 # Debugging tips: add "-g" flag to include debugging information in the generated shared object file.
