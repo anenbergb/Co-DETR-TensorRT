@@ -62,61 +62,61 @@ def test_ms_deform_attn_forward(dtype):
     assert torch.allclose(output, output_pytorch, rtol=1e-2, atol=1e-3)
 
 
-# @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
-# def test_ms_deform_attn_backward(dtype):
-#     # Define the input parameters
-#     batch_size = 2
-#     num_heads = 4
-#     num_queries = 8
-#     embed_dim = 16
-#     num_levels = 3
-#     num_points = 4
-#     height, width = 32, 32
-#     device = "cuda:0"
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+def test_ms_deform_attn_backward(dtype):
+    # Define the input parameters
+    batch_size = 2
+    num_heads = 4
+    num_queries = 8
+    embed_dim = 16
+    num_levels = 3
+    num_points = 4
+    height, width = 32, 32
+    device = "cuda:0"
 
-#     # Create random input tensors
-#     spatial_shapes = torch.tensor(
-#         [[height, width], [height // 2, width // 2], [height // 4, width // 4]], device=device, dtype=torch.int64
-#     )
-#     level_start_index = torch.tensor(
-#         [0, height * width, height * width + (height // 2) * (width // 2)], device=device, dtype=torch.int64
-#     )
-#     value = torch.rand(
-#         batch_size, sum([h * w for h, w in spatial_shapes]), num_heads, embed_dim, device=device, dtype=dtype
-#     )
-#     sampling_loc = torch.rand(batch_size, num_queries, num_heads, num_levels, num_points, 2, device=device, dtype=dtype)
-#     attn_weight = torch.rand(batch_size, num_queries, num_heads, num_levels, num_points, device=device, dtype=dtype)
-#     grad_output = torch.rand(batch_size, num_queries, num_heads * embed_dim, device=device, dtype=dtype)
-#     im2col_step = 2
+    # Create random input tensors
+    spatial_shapes = torch.tensor(
+        [[height, width], [height // 2, width // 2], [height // 4, width // 4]], device=device, dtype=torch.int64
+    )
+    level_start_index = torch.tensor(
+        [0, height * width, height * width + (height // 2) * (width // 2)], device=device, dtype=torch.int64
+    )
+    value = torch.rand(
+        batch_size, sum([h * w for h, w in spatial_shapes]), num_heads, embed_dim, device=device, dtype=dtype
+    )
+    sampling_loc = torch.rand(batch_size, num_queries, num_heads, num_levels, num_points, 2, device=device, dtype=dtype)
+    attn_weight = torch.rand(batch_size, num_queries, num_heads, num_levels, num_points, device=device, dtype=dtype)
+    grad_output = torch.rand(batch_size, num_queries, num_heads * embed_dim, device=device, dtype=dtype)
+    im2col_step = 2
 
-#     # Create tensors for gradients
-#     grad_value = torch.zeros_like(value)
-#     grad_sampling_loc = torch.zeros_like(sampling_loc)
-#     grad_attn_weight = torch.zeros_like(attn_weight)
+    # Create tensors for gradients
+    grad_value = torch.zeros_like(value)
+    grad_sampling_loc = torch.zeros_like(sampling_loc)
+    grad_attn_weight = torch.zeros_like(attn_weight)
 
-#     # Run the backward function
-#     ms_deform_attn_backward(
-#         value,
-#         spatial_shapes,
-#         level_start_index,
-#         sampling_loc,
-#         attn_weight,
-#         grad_output,
-#         grad_value,
-#         grad_sampling_loc,
-#         grad_attn_weight,
-#         im2col_step,
-#     )
+    # Run the backward function
+    torch.ops.codetr.multi_scale_deformable_attention_backward(
+        value,
+        spatial_shapes,
+        level_start_index,
+        sampling_loc,
+        attn_weight,
+        grad_output,
+        grad_value,
+        grad_sampling_loc,
+        grad_attn_weight,
+        im2col_step,
+    )
 
-#     # Check the gradients are not all zeros
-#     assert not torch.all(grad_value == 0)
-#     assert not torch.all(grad_sampling_loc == 0)
-#     assert not torch.all(grad_attn_weight == 0)
+    # Check the gradients are not all zeros
+    assert not torch.all(grad_value == 0)
+    assert not torch.all(grad_sampling_loc == 0)
+    assert not torch.all(grad_attn_weight == 0)
 
-#     # Check that the gradients are on the correct device
-#     assert grad_value.device == torch.device(device)
-#     assert grad_sampling_loc.device == torch.device(device)
-#     assert grad_attn_weight.device == torch.device(device)
+    # Check that the gradients are on the correct device
+    assert grad_value.device == torch.device(device)
+    assert grad_sampling_loc.device == torch.device(device)
+    assert grad_attn_weight.device == torch.device(device)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
@@ -361,54 +361,54 @@ def test_forward_equal_with_pytorch_half():
     assert max_rel_err < 1e-2
 
 
-# @pytest.mark.parametrize(
-#     "channels",
-#     [
-#         4,
-#         30,
-#         32,
-#         64,
-#         71,
-#         1025,
-#     ],
-# )
-# @pytest.mark.parametrize("dtype", [torch.float, torch.double, torch.half])
-# def test_gradient_numerical(channels, dtype, grad_value=True, grad_sampling_loc=True, grad_attn_weight=True):
-#     device = "cuda:0"
-#     N, M, _ = 1, 2, 2
-#     Lq, L, P = 2, 2, 2
-#     shapes = torch.as_tensor([(3, 2), (2, 1)], dtype=torch.long).to(device)
-#     level_start_index = torch.cat((shapes.new_zeros((1,)), shapes.prod(1).cumsum(0)[:-1]))
-#     S = sum((H * W).item() for H, W in shapes)
+@pytest.mark.parametrize(
+    "channels",
+    [
+        4,
+        30,
+        32,
+        64,
+        71,
+        1025,
+    ],
+)
+@pytest.mark.parametrize("dtype", [torch.float, torch.double, torch.half])
+def test_gradient_numerical(channels, dtype, grad_value=True, grad_sampling_loc=True, grad_attn_weight=True):
+    device = "cuda:0"
+    N, M, _ = 1, 2, 2
+    Lq, L, P = 2, 2, 2
+    shapes = torch.as_tensor([(3, 2), (2, 1)], dtype=torch.long).to(device)
+    level_start_index = torch.cat((shapes.new_zeros((1,)), shapes.prod(1).cumsum(0)[:-1]))
+    S = sum((H * W).item() for H, W in shapes)
 
-#     value = torch.rand(N, S, M, channels).to(device) * 0.01
-#     sampling_locations = torch.rand(N, Lq, M, L, P, 2).to(device)
-#     attention_weights = torch.rand(N, Lq, M, L, P).to(device) + 1e-5
-#     attention_weights /= attention_weights.sum(-1, keepdim=True).sum(-2, keepdim=True)
-#     im2col_step = 2
+    value = torch.rand(N, S, M, channels).to(device) * 0.01
+    sampling_locations = torch.rand(N, Lq, M, L, P, 2).to(device)
+    attention_weights = torch.rand(N, Lq, M, L, P).to(device) + 1e-5
+    attention_weights /= attention_weights.sum(-1, keepdim=True).sum(-2, keepdim=True)
+    im2col_step = 2
 
-#     func = torch.ops.codetr.multi_scale_deformable_attention
+    func = torch.ops.codetr.multi_scale_deformable_attention
 
-#     value.requires_grad = grad_value
-#     sampling_locations.requires_grad = grad_sampling_loc
-#     attention_weights.requires_grad = grad_attn_weight
+    value.requires_grad = grad_value
+    sampling_locations.requires_grad = grad_sampling_loc
+    attention_weights.requires_grad = grad_attn_weight
 
-#     dtype = torch.double
-#     eps = 1e-6
+    dtype = torch.double
+    eps = 1e-6
 
-#     assert gradcheck(
-#         func,
-#         (
-#             value.to(dtype),
-#             shapes,
-#             level_start_index,
-#             sampling_locations.to(dtype),
-#             attention_weights.to(dtype),
-#             im2col_step,
-#         ),
-#         eps=eps,
-#         atol=1e-2,
-#     )
+    assert gradcheck(
+        func,
+        (
+            value.to(dtype),
+            shapes,
+            level_start_index,
+            sampling_locations.to(dtype),
+            attention_weights.to(dtype),
+            im2col_step,
+        ),
+        eps=eps,
+        atol=1e-2,
+    )
 
 
 def test_export():
