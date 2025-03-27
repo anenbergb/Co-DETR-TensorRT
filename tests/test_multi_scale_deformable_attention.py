@@ -8,6 +8,7 @@ from codetr.ops import multi_scale_deformable_attention_pytorch
 from codetr.multi_scale_deformable_attention import MultiScaleDeformableAttention
 
 import torch_tensorrt
+from .helpers import benchmark_runtime
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
@@ -410,116 +411,6 @@ def test_gradient_numerical(channels, dtype, grad_value=True, grad_sampling_loc=
     )
 
 
-def test_export():
-    device = torch.device("cuda:0")
-
-    embed_dims = 64
-    num_levels = 3
-    num_heads = 8
-    num_points = 4
-    im2col_step = 2
-    msda = MultiScaleDeformableAttention(
-        embed_dims=embed_dims,
-        num_heads=num_heads,
-        num_levels=num_levels,
-        num_points=num_points,
-        im2col_step=im2col_step,
-        batch_first=False,
-    ).eval()
-    msda.init_weights()
-    num_query = 10
-    bs = 1
-    height, width = 32, 32
-    query = torch.rand(num_query, bs, embed_dims, device=device)
-    spatial_shapes = torch.tensor(
-        [[height, width], [height // 2, width // 2], [height // 4, width // 4]], device=device, dtype=torch.int64
-    )
-    level_start_index = torch.tensor(
-        [0, height * width, height * width + (height // 2) * (width // 2)], device=device, dtype=torch.int64
-    )
-    reference_points = torch.rand(bs, num_query, num_levels, 2, device=device)
-
-    spatial_len = sum([h * w for h, w in spatial_shapes])
-    value = torch.rand(spatial_len, bs, embed_dims, device=device)
-
-    msda.to(device)
-
-    with torch.inference_mode():
-        output = msda(
-            query,
-            value=value,
-            reference_points=reference_points,
-            spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
-        )
-
-        msda_export = torch.export.export(
-            msda,
-            args=(query,),
-            kwargs={
-                "value": value,
-                "reference_points": reference_points,
-                "spatial_shapes": spatial_shapes,
-                "level_start_index": level_start_index,
-            },
-            strict=True,
-        )
-        msda_export_out = msda_export.module()(
-            query,
-            value=value,
-            reference_points=reference_points,
-            spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
-        )
-        try:
-            torch.testing.assert_close(output, msda_export_out, rtol=1e-5, atol=1e-5)
-        except AssertionError as e:
-            # Calculate and print details about the differences
-            max_abs_err = (output - msda_export_out).abs().max().item()
-            relative_err = (output - msda_export_out).abs() / output.abs().clamp(min=1e-10)
-            max_rel_err = relative_err.max().item()
-            mean_rel_err = relative_err.mean().item()
-
-            print(f"\nWARNING: Exported model output differs from original")
-            print(f"Max absolute error: {max_abs_err:.6e}")
-            print(f"Max relative error: {max_rel_err:.6e}")
-            print(f"Mean relative error: {mean_rel_err:.6e}")
-            print(f"Original assertion error: {e}")
-
-        msda_trt = torch_tensorrt.dynamo.compile(
-            msda_export,
-            arg_inputs=(query,),
-            kwarg_inputs={
-                "value": value,
-                "reference_points": reference_points,
-                "spatial_shapes": spatial_shapes,
-                "level_start_index": level_start_index,
-            },
-            enabled_precisions={torch.float32},
-        )
-        msda_trt_out = msda_trt(
-            query,
-            value=value,
-            reference_points=reference_points,
-            spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
-        )
-        try:
-            torch.testing.assert_close(output, msda_trt_out, rtol=1e-1, atol=1e-1)
-        except AssertionError as e:
-            # Calculate and print details about the differences
-            max_abs_err = (output - msda_trt_out).abs().max().item()
-            relative_err = (output - msda_trt_out).abs() / output.abs().clamp(min=1e-10)
-            max_rel_err = relative_err.max().item()
-            mean_rel_err = relative_err.mean().item()
-
-            print(f"\nWARNING: Exported model output differs from original")
-            print(f"Max absolute error: {max_abs_err:.6e}")
-            print(f"Max relative error: {max_rel_err:.6e}")
-            print(f"Mean relative error: {mean_rel_err:.6e}")
-            print(f"Original assertion error: {e}")
-
-
 def test_benchmark_performance():
     """Compare performance between CUDA and PyTorch implementations"""
 
@@ -607,7 +498,8 @@ def test_benchmark_performance():
             )
 
 
-def test_benchmark_tensorrt_performance():
+@pytest.mark.parametrize("dtype", [torch.float16])
+def test_export_and_benchmark(dtype):
     """Compare performance between MultiScaleDeformableAttention and TensorRT exported versions"""
 
     iterations = 100
@@ -625,7 +517,9 @@ def test_benchmark_tensorrt_performance():
     bs = 1
     height, width = 64, 64  # Larger feature maps for better benchmarking
 
-    print(f"\nBenchmarking TensorRT performance: embed_dims={embed_dims}, num_heads={num_heads}, num_query={num_query}")
+    print(
+        f"\nBenchmarking TensorRT performance: embed_dims={embed_dims}, num_heads={num_heads}, num_query={num_query} with dtype={dtype}"
+    )
 
     # Create model and inputs
     msda = (
@@ -639,22 +533,21 @@ def test_benchmark_tensorrt_performance():
         )
         .eval()
         .to(device)
+        .to(dtype)
     )
-
-    msda.init_weights()
 
     # Create inputs
     torch.manual_seed(42)  # For reproducibility
-    query = torch.rand(num_query, bs, embed_dims, device=device)
+    query = torch.rand(num_query, bs, embed_dims, device=device, dtype=dtype)
     spatial_shapes = torch.tensor(
         [[height, width], [height // 2, width // 2], [height // 4, width // 4]], device=device, dtype=torch.int64
     )
     level_start_index = torch.tensor(
         [0, height * width, height * width + (height // 2) * (width // 2)], device=device, dtype=torch.int64
     )
-    reference_points = torch.rand(bs, num_query, num_levels, 2, device=device)
+    reference_points = torch.rand(bs, num_query, num_levels, 2, device=device, dtype=dtype)
     spatial_len = sum([h * w for h, w in spatial_shapes])
-    value = torch.rand(spatial_len, bs, embed_dims, device=device)
+    value = torch.rand(spatial_len, bs, embed_dims, device=device, dtype=dtype)
 
     # Define benchmark functions
     def run_pytorch_model():
@@ -667,6 +560,7 @@ def test_benchmark_tensorrt_performance():
         )
 
     with torch.inference_mode():
+        run_pytorch_model()
         # Export the model
         msda_export = torch.export.export(
             msda,
@@ -679,6 +573,7 @@ def test_benchmark_tensorrt_performance():
             },
             strict=True,
         )
+        print(f"✅ Exported {type(msda)} to {type(msda_export)} with dtype={dtype}")
 
         def run_exported_model():
             return msda_export.module()(
@@ -699,8 +594,9 @@ def test_benchmark_tensorrt_performance():
                 "spatial_shapes": spatial_shapes,
                 "level_start_index": level_start_index,
             },
-            enabled_precisions={torch.float32},
+            enabled_precisions=(dtype,),
         )
+        print(f"✅ Compiled {type(msda_export)} to TensorRT with dtype={dtype}")
 
         def run_tensorrt_model():
             return msda_trt(
@@ -710,46 +606,6 @@ def test_benchmark_tensorrt_performance():
                 spatial_shapes=spatial_shapes,
                 level_start_index=level_start_index,
             )
-
-        # Warm-up runs
-        _ = run_pytorch_model()
-        _ = run_exported_model()
-        _ = run_tensorrt_model()
-
-        # Benchmark
-        t0 = benchmark.Timer(
-            stmt="run_pytorch_model()",
-            globals={"run_pytorch_model": run_pytorch_model},
-            num_threads=1,
-        )
-
-        t1 = benchmark.Timer(
-            stmt="run_exported_model()",
-            globals={"run_exported_model": run_exported_model},
-            num_threads=1,
-        )
-
-        t2 = benchmark.Timer(
-            stmt="run_tensorrt_model()",
-            globals={"run_tensorrt_model": run_tensorrt_model},
-            num_threads=1,
-        )
-
-        # Run benchmarks
-        pytorch_time = t0.timeit(iterations)
-        exported_time = t1.timeit(iterations)
-        tensorrt_time = t2.timeit(iterations)
-
-        print(f"\nPyTorch implementation: {pytorch_time}")
-        print(f"Exported implementation: {exported_time}")
-        print(f"TensorRT implementation: {tensorrt_time}")
-
-        # Calculate speedups
-        speedup_export = pytorch_time.mean / exported_time.mean
-        speedup_trt = pytorch_time.mean / tensorrt_time.mean
-
-        print(f"\nExported speedup: {speedup_export:.2f}x")
-        print(f"TensorRT speedup: {speedup_trt:.2f}x")
 
         # Verify outputs match
         output_pytorch = run_pytorch_model()
@@ -776,6 +632,8 @@ def test_benchmark_tensorrt_performance():
             max_rel_err = rel_err.max().item()
 
             print(f"⚠️ TensorRT model differences: max_abs_err={max_abs_err:.6e}, max_rel_err={max_rel_err:.6e}")
+
+        benchmark_runtime(run_pytorch_model, run_exported_model, run_tensorrt_model, iterations=iterations)
 
 
 if __name__ == "__main__":

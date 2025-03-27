@@ -90,8 +90,10 @@ class MultiScaleDeformableAttention(BaseModule):
     def init_weights(self) -> None:
         """Default initialization for Parameters of Module."""
         constant_init(self.sampling_offsets, 0.0)
-        device = next(self.parameters()).device
-        thetas = torch.arange(self.num_heads, dtype=torch.float32, device=device) * (2.0 * math.pi / self.num_heads)
+        params = next(self.parameters())
+        device = params.device
+        dtype = params.dtype
+        thetas = torch.arange(self.num_heads, dtype=dtype, device=device) * (2.0 * math.pi / self.num_heads)
         grid_init = torch.stack([thetas.cos(), thetas.sin()], -1)
         grid_init = (
             (grid_init / grid_init.abs().max(-1, keepdim=True)[0])
