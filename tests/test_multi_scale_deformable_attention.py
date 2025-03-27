@@ -498,7 +498,7 @@ def test_benchmark_performance():
             )
 
 
-@pytest.mark.parametrize("dtype", [torch.float16])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
 def test_export_and_benchmark(dtype):
     """Compare performance between MultiScaleDeformableAttention and TensorRT exported versions"""
 

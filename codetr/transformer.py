@@ -5,7 +5,6 @@ import torch
 import torch.nn as nn
 from mmcv.cnn import build_norm_layer
 
-from mmcv.ops import MultiScaleDeformableAttention
 from mmengine.model import BaseModule
 from mmengine.model.weight_init import xavier_init
 from torch.nn.init import normal_
@@ -19,6 +18,8 @@ except Exception:
 
 
 from codetr.transformer_mmcv import BaseTransformerLayer
+
+from codetr.multi_scale_deformable_attention import MultiScaleDeformableAttention
 
 # In order to save the cost and effort of reproduction,
 # I did not refactor it into the style of mmdet 3.x DETR.
@@ -232,7 +233,7 @@ class DeformableDetrTransformer(Transformer):
             xavier_init(self.reference_points, distribution="uniform", bias=0.0)
         normal_(self.level_embeds)
 
-    def gen_encoder_output_proposals(self, memory, memory_padding_mask, spatial_shapes):
+    def gen_encoder_output_proposals(self, memory, memory_padding_mask, mlvl_masks):
         """Generate proposals from encoded memory.
 
         Args:
@@ -242,8 +243,11 @@ class DeformableDetrTransformer(Transformer):
                 all level.
             memory_padding_mask (Tensor): Padding mask for memory.
                 has shape (bs, num_key).
-            spatial_shapes (Tensor): The shape of all feature maps.
-                has shape (num_level, 2).
+                0 within image
+                1 in padded_region
+            mlvl_masks (list(Tensor)): The key_padding_mask from
+                different level used for encoder and decoder,
+                each element has shape  [bs, h, w].
 
         Returns:
             tuple: A tuple of feature map and bbox prediction.
@@ -256,18 +260,16 @@ class DeformableDetrTransformer(Transformer):
                     after a inverse sigmoid, has shape \
                     (bs, num_keys, 4).
         """
-
-        N, S, C = memory.shape
         proposals = []
-        _cur = 0
-        for lvl, (H, W) in enumerate(spatial_shapes):
-            mask_flatten_ = memory_padding_mask[:, _cur : (_cur + H * W)].view(N, H, W, 1)
-            valid_H = torch.sum(~mask_flatten_[:, :, 0, 0], 1)
-            valid_W = torch.sum(~mask_flatten_[:, 0, :, 0], 1)
+        for lvl, mlvl_mask in enumerate(mlvl_masks):
+            N, H, W = mlvl_mask.shape
+            # summing the number of valid pixels (within the image, not in the padded region)
+            valid_H = torch.sum(~mlvl_mask[:, :, 0], 1)
+            valid_W = torch.sum(~mlvl_mask[:, 0, :], 1)
 
             grid_y, grid_x = torch.meshgrid(
-                torch.linspace(0, H - 1, H, dtype=torch.float32, device=memory.device),
-                torch.linspace(0, W - 1, W, dtype=torch.float32, device=memory.device),
+                torch.linspace(0, H - 1, H, dtype=memory.dtype, device=memory.device),
+                torch.linspace(0, W - 1, W, dtype=memory.dtype, device=memory.device),
             )
             grid = torch.cat([grid_x.unsqueeze(-1), grid_y.unsqueeze(-1)], -1)
 
@@ -276,7 +278,7 @@ class DeformableDetrTransformer(Transformer):
             wh = torch.ones_like(grid) * 0.05 * (2.0**lvl)
             proposal = torch.cat((grid, wh), -1).view(N, -1, 4)
             proposals.append(proposal)
-            _cur += H * W
+
         output_proposals = torch.cat(proposals, 1)
         output_proposals_valid = ((output_proposals > 0.01) & (output_proposals < 0.99)).all(-1, keepdim=True)
         output_proposals = torch.log(output_proposals / (1 - output_proposals))
@@ -977,8 +979,8 @@ def get_reference_points(mlvl_feats, valid_ratios, device):
     for lvl, feat in enumerate(mlvl_feats):
         _, _, H, W = feat.shape
         ref_y, ref_x = torch.meshgrid(
-            torch.linspace(0.5, H - 0.5, H, dtype=torch.float32, device=device),
-            torch.linspace(0.5, W - 0.5, W, dtype=torch.float32, device=device),
+            torch.linspace(0.5, H - 0.5, H, dtype=feat.dtype, device=device),
+            torch.linspace(0.5, W - 0.5, W, dtype=feat.dtype, device=device),
         )
         ref_y = ref_y.reshape(-1)[None] / (valid_ratios[:, None, lvl, 1] * H)
         ref_x = ref_x.reshape(-1)[None] / (valid_ratios[:, None, lvl, 0] * W)
@@ -1075,7 +1077,7 @@ class CoDinoTransformer(CoDeformableDetrTransformer):
         memory = memory.permute(1, 0, 2)
         bs, _, c = memory.shape
 
-        output_memory, output_proposals = self.gen_encoder_output_proposals(memory, mask_flatten, spatial_shapes)
+        output_memory, output_proposals = self.gen_encoder_output_proposals(memory, mask_flatten, mlvl_masks)
         enc_outputs_class = cls_branches[self.decoder.num_layers](output_memory)
         enc_outputs_coord_unact = reg_branches[self.decoder.num_layers](output_memory) + output_proposals
         cls_out_features = cls_branches[self.decoder.num_layers].out_features
