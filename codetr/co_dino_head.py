@@ -119,7 +119,9 @@ class CoDINOHead(DINOHead):
             mlvl_positional_encodings.append(self.positional_encoding(mlvl_masks[-1]))
 
         query_embeds = None
-        hs, inter_references, topk_score, topk_anchor, enc_outputs = self.transformer(
+        # hs, inter_references, topk_score, topk_anchor, enc_outputs =
+        # (1,900,256), (1,900,256)
+        final_decoder_state, final_decoder_references = self.transformer(
             mlvl_feats,
             mlvl_masks,
             query_embeds,
@@ -130,47 +132,22 @@ class CoDINOHead(DINOHead):
             reg_branches=self.reg_branches if self.with_box_refine else None,  # noqa:E501
             cls_branches=self.cls_branches if self.as_two_stage else None,  # noqa:E501
         )
-        outs = []
-        num_level = len(mlvl_feats)
-        start = 0
-        # split enc_outputs to each level and reshape to (bs, c, h, w)
-        for lvl in range(num_level):
-            bs, c, h, w = mlvl_feats[lvl].shape
-            end = start + h * w
-            feat = enc_outputs[start:end].permute(1, 2, 0).contiguous()
-            start = end
-            outs.append(feat.reshape(bs, c, h, w))
-        outs.append(self.downsample(outs[-1]))
 
-        hs = hs.permute(0, 2, 1, 3)
+        # is this 6 or 7?
+        lvl = len(self.transformer.decoder.layers) - 1
+        reference = inverse_sigmoid(final_decoder_references, eps=1e-3)
+        outputs_classes = self.cls_branches[lvl](final_decoder_state)
+        tmp = self.reg_branches[lvl](final_decoder_state)
+        if reference.shape[-1] == 4:
+            tmp += reference
+        else:
+            assert reference.shape[-1] == 2
+            tmp[..., :2] += reference
+        outputs_coords = tmp.sigmoid()
 
-        outputs_classes = []
-        outputs_coords = []
+        return outputs_classes, outputs_coords
 
-        for lvl in range(hs.shape[0]):
-            reference = inter_references[lvl]
-            reference = inverse_sigmoid(reference, eps=1e-3)
-            outputs_class = self.cls_branches[lvl](hs[lvl])
-            tmp = self.reg_branches[lvl](hs[lvl])
-            if reference.shape[-1] == 4:
-                tmp += reference
-            else:
-                assert reference.shape[-1] == 2
-                tmp[..., :2] += reference
-            outputs_coord = tmp.sigmoid()
-            outputs_classes.append(outputs_class)
-            outputs_coords.append(outputs_coord)
-
-        outputs_classes = torch.stack(outputs_classes)
-        outputs_coords = torch.stack(outputs_coords)
-
-        return outputs_classes, outputs_coords, topk_score, topk_anchor, outs
-
-    def predict_by_feat(
-        self, all_cls_scores, all_bbox_preds, enc_cls_scores, enc_bbox_preds, enc_outputs, batch_img_metas, rescale=True
-    ):
-        cls_scores = all_cls_scores[-1]
-        bbox_preds = all_bbox_preds[-1]
+    def predict_by_feat(self, cls_scores, bbox_preds, batch_img_metas, rescale=True):
 
         result_list = []
         for img_id in range(len(batch_img_metas)):

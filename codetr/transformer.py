@@ -920,9 +920,10 @@ class DinoTransformerDecoder(DeformableDetrTransformerDecoder):
         return pos
 
     def forward(self, query, *args, reference_points=None, valid_ratios=None, reg_branches=None, **kwargs):
+        """
+        Updated to not return interemediate results
+        """
         output = query
-        intermediate = []
-        intermediate_reference_points = [reference_points]
         for lid, layer in enumerate(self.layers):
             if reference_points.shape[-1] == 4:
                 reference_points_input = (
@@ -933,30 +934,21 @@ class DinoTransformerDecoder(DeformableDetrTransformerDecoder):
                 reference_points_input = reference_points[:, :, None] * valid_ratios[:, None]
 
             query_sine_embed = self.gen_sineembed_for_position(reference_points_input[:, :, 0, :], self.embed_dims // 2)
-            query_pos = self.ref_point_head(query_sine_embed)
+            query_pos = self.ref_point_head(query_sine_embed)  # (1,900,256)
 
-            query_pos = query_pos.permute(1, 0, 2)
+            query_pos = query_pos.permute(1, 0, 2)  # (900, 1, 256)
             output = layer(output, *args, query_pos=query_pos, reference_points=reference_points_input, **kwargs)
-            output = output.permute(1, 0, 2)
 
             if reg_branches is not None:
-                tmp = reg_branches[lid](output)
+                tmp = reg_branches[lid](output.permute(1, 0, 2))
                 assert reference_points.shape[-1] == 4
                 new_reference_points = tmp + inverse_sigmoid(reference_points, eps=1e-3)
                 new_reference_points = new_reference_points.sigmoid()
                 reference_points = new_reference_points.detach()
 
-            output = output.permute(1, 0, 2)
-            if self.return_intermediate:
-                intermediate.append(self.norm(output))
-                intermediate_reference_points.append(new_reference_points)
-                # NOTE this is for the "Look Forward Twice" module,
-                # in the DeformDETR, reference_points was appended.
-
-        if self.return_intermediate:
-            return torch.stack(intermediate), torch.stack(intermediate_reference_points)
-
-        return output, reference_points
+        output = output.permute(1, 0, 2)  # (900,1,256) -> (1,900,256)
+        output = self.norm(output)
+        return output, reference_points  # (1,900,4)
 
 
 def get_reference_points(mlvl_feats, valid_ratios, device):
@@ -1081,16 +1073,15 @@ class CoDinoTransformer(CoDeformableDetrTransformer):
         bs, _, c = memory.shape
 
         output_memory, output_proposals = self.gen_encoder_output_proposals(memory, mask_flatten, mlvl_masks)
+        # decoder num_layers = 6, but # cls_branches = 7, so cls_branches[6] is the final classification branch
         enc_outputs_class = cls_branches[self.decoder.num_layers](output_memory)
         enc_outputs_coord_unact = reg_branches[self.decoder.num_layers](output_memory) + output_proposals
-        cls_out_features = cls_branches[self.decoder.num_layers].out_features
+
         topk = self.two_stage_num_proposals
         # NOTE In DeformDETR, enc_outputs_class[..., 0] is used for topk
         topk_indices = torch.topk(enc_outputs_class.max(-1)[0], topk, dim=1)[1]
 
-        topk_score = torch.gather(enc_outputs_class, 1, topk_indices.unsqueeze(-1).repeat(1, 1, cls_out_features))
         topk_coords_unact = torch.gather(enc_outputs_coord_unact, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 4))
-        topk_anchor = topk_coords_unact.sigmoid()
         topk_coords_unact = topk_coords_unact.detach()
 
         query = self.query_embed.weight[:, None, :].repeat(1, bs, 1).transpose(0, 1)
@@ -1107,7 +1098,9 @@ class CoDinoTransformer(CoDeformableDetrTransformer):
         # decoder
         query = query.permute(1, 0, 2)
         memory = memory.permute(1, 0, 2)
-        inter_states, inter_references = self.decoder(
+
+        # (1,900,256), (1,900,256)
+        final_state, final_references = self.decoder(
             query=query,
             key=None,
             value=memory,
@@ -1120,10 +1113,7 @@ class CoDinoTransformer(CoDeformableDetrTransformer):
             reg_branches=reg_branches,
             **kwargs,
         )
-
-        inter_references_out = inter_references
-
-        return inter_states, inter_references_out, topk_score, topk_anchor, memory
+        return final_state, final_references
 
     def forward_aux(
         self,
