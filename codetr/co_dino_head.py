@@ -133,6 +133,7 @@ class CoDINOHead(DINOHead):
         outs = []
         num_level = len(mlvl_feats)
         start = 0
+        # split enc_outputs to each level and reshape to (bs, c, h, w)
         for lvl in range(num_level):
             bs, c, h, w = mlvl_feats[lvl].shape
             end = start + h * w
@@ -165,35 +166,9 @@ class CoDINOHead(DINOHead):
 
         return outputs_classes, outputs_coords, topk_score, topk_anchor, outs
 
-        # predictions = self.predict_by_feat(
-        #     all_cls_scores=outputs_classes,
-        #     all_bbox_preds=outputs_coords,
-        #     enc_cls_scores=topk_score,
-        #     enc_bbox_preds=topk_anchor,
-        #     enc_outputs=outs,
-        #     batch_img_metas=[],
-        #     rescale=rescale,
-        # )
-        # return predictions
-
-    # def predict(self,
-    #             feats: List[Tensor],
-    #             batch_data_samples: SampleList,
-    #             rescale: bool = True) -> InstanceList:
-    #     batch_img_metas = [
-    #         data_samples.metainfo for data_samples in batch_data_samples
-    #     ]
-    #     outs = self.forward(feats, batch_img_metas)
-
-    #     predictions = self.predict_by_feat(
-    #         *outs, batch_img_metas=batch_img_metas, rescale=rescale)
-
-    #     return predictions
-
     def predict_by_feat(
         self, all_cls_scores, all_bbox_preds, enc_cls_scores, enc_bbox_preds, enc_outputs, batch_img_metas, rescale=True
     ):
-
         cls_scores = all_cls_scores[-1]
         bbox_preds = all_bbox_preds[-1]
 

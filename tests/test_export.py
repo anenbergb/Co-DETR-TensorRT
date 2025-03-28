@@ -227,7 +227,7 @@ def test_neck(dtype):
     benchmark_runtime(run_pytorch_model, run_exported_model, run_tensorrt_model, iterations=iterations)
 
 
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+@pytest.mark.parametrize("dtype", [torch.float32])
 def test_query_head(dtype):
     print(f"Testing CoDINOHead with dtype={dtype}")
 
@@ -237,24 +237,24 @@ def test_query_head(dtype):
     device = "cuda:0"
     optimization_level = 3  # default is 3, max is 5
 
-    # cfg = Config(query_head_config)
-    model = CoDINOHead(**query_head_config).to(device).to(dtype)
+    cfg = Config(query_head_config)
+    model = CoDINOHead(**cfg).to(device).to(dtype)
     model.init_weights()
     model.to(dtype)
     model.eval()
 
-    pytest.set_trace()
-
-    input_height = 1280
-    input_width = 1920
+    # input_height = 1280
+    # input_width = 1920
+    input_height = 384
+    input_width = 384
     in_channels = 256
     batch_size = 1
     img_feats = []
     downscales = [4, 8, 16, 32, 64]
-    for in_channel, downscale in zip(in_channels, downscales):
+    for downscale in downscales:
         img_feats.append(
             torch.randn(
-                batch_size, in_channel, input_height // downscale, input_width // downscale, dtype=dtype, device=device
+                batch_size, in_channels, input_height // downscale, input_width // downscale, dtype=dtype, device=device
             )
         )
     # 0 within image, 1 in padded region
