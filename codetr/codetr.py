@@ -1,5 +1,6 @@
 import copy
 from typing import Tuple, Union
+import warnings
 
 import torch
 import torch.nn as nn
@@ -9,7 +10,7 @@ from mmdet.models.detectors.base import BaseDetector
 from mmdet.registry import MODELS
 from mmdet.structures import OptSampleList, SampleList
 from mmdet.utils import InstanceList, OptConfigType, OptMultiConfig
-
+from mmdet.evaluation import get_classes
 
 from mmengine.config import Config
 from mmengine.runner.checkpoint import _load_checkpoint, _load_checkpoint_to_model
@@ -67,21 +68,6 @@ class CoDETR(nn.Module):
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
 
-    def extract_feat(self, batch_inputs: Tensor) -> Tuple[Tensor]:
-        """Extract features.
-
-        Args:
-            batch_inputs (Tensor): Image tensor, has shape (bs, dim, H, W).
-
-        Returns:
-            tuple[Tensor]: Tuple of feature maps from neck. Each feature map
-            has shape (bs, dim, H, W).
-        """
-        x = self.backbone(batch_inputs)
-        if self.with_neck:
-            x = self.neck(x)
-        return x
-
     def forward(self, batch_inputs: Tensor, batch_data_samples: SampleList, rescale: bool = True) -> SampleList:
         """Predict results from a batch of inputs and data samples with post-
         processing.
@@ -114,8 +100,10 @@ class CoDETR(nn.Module):
                 input_img_h, input_img_w = img_metas["batch_input_shape"]
                 img_metas["img_shape"] = [input_img_h, input_img_w]
 
-        img_feats = self.extract_feat(batch_inputs)
-        results_list = self.predict_query_head(img_feats, batch_data_samples, rescale=rescale)
+        # (bs,dim,H,W) -> List[ (bs,dim,H,W), ...]
+        image_feats = self.backbone(batch_inputs)
+        image_feats = self.neck(image_feats)
+        results_list = self.predict_query_head(image_feats, batch_data_samples, rescale=rescale)
         return results_list
 
     def predict_query_head(
@@ -133,6 +121,25 @@ class CoDETR(nn.Module):
         return predictions
 
 
+def get_dataset_meta(checkpoint):
+    checkpoint_meta = checkpoint.get("meta", {})
+    # save the dataset_meta in the model for convenience
+    if "dataset_meta" in checkpoint_meta:
+        # mmdet 3.x, all keys should be lowercase
+        dataset_meta = {k.lower(): v for k, v in checkpoint_meta["dataset_meta"].items()}
+    elif "CLASSES" in checkpoint_meta:
+        # < mmdet 3.x
+        classes = checkpoint_meta["CLASSES"]
+        dataset_meta = {"classes": classes}
+    else:
+        warnings.warn(
+            "dataset_meta or class names are not saved in the " "checkpoint's meta data, use COCO classes by default."
+        )
+        dataset_meta = {"classes": get_classes("coco")}
+    dataset_meta["palette"] = "coco"
+    return dataset_meta
+
+
 def build_CoDETR(model_file: str, weights_file: str, device: str = "cuda") -> CoDETR:
     """Build CoDETR model from model file and weights file."""
     cfg = Config.fromfile(model_file)
@@ -147,4 +154,5 @@ def build_CoDETR(model_file: str, weights_file: str, device: str = "cuda") -> Co
     _load_checkpoint_to_model(model, checkpoint)
     model.to(device)
     model.eval()
-    return model
+    dataset_meta = get_dataset_meta(checkpoint)
+    return model, dataset_meta
