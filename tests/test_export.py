@@ -1,8 +1,15 @@
 import torch
 import pytest
+import numpy as np
 
 from codetr.swin import SwinTransformer
 from codetr.co_dino_head import CoDINOHead
+from codetr.transformer import (
+    DetrTransformerEncoder,
+    DinoTransformerDecoder,
+    get_reference_points,
+    get_encoder_output_proposals,
+)
 
 from mmengine.config import Config
 from mmdet.registry import MODELS
@@ -12,6 +19,7 @@ import torch_tensorrt
 from .helpers import benchmark_runtime
 
 torch_tensorrt.runtime.set_multi_device_safe_mode(False)
+
 
 # model settings
 swin_config = dict(
@@ -304,9 +312,6 @@ def test_query_head(dtype):
     benchmark_runtime(run_pytorch_model, run_exported_model, run_tensorrt_model, iterations=iterations)
 
 
-from codetr.transformer import DetrTransformerEncoder, get_reference_points
-
-
 class EncoderWrapper(torch.nn.Module):
     def __init__(self, encoder):
         super().__init__()
@@ -335,7 +340,7 @@ class EncoderWrapper(torch.nn.Module):
         )
 
 
-@pytest.mark.parametrize("dtype", [torch.float32])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
 def test_transformer_encoder(dtype):
     print(f"Testing DetrTransformerEncoder with dtype={dtype}")
 
@@ -403,8 +408,6 @@ def test_transformer_encoder(dtype):
                 valid_ratios=valid_ratios,
             )
 
-        run_pytorch_model()
-
         model_export = torch.export.export(
             model,
             args=(feat_flatten,),
@@ -455,6 +458,192 @@ def test_transformer_encoder(dtype):
                 query_key_padding_mask=mask_flatten,
                 spatial_shapes=spatial_shapes,
                 reference_points=reference_points,
+                level_start_index=level_start_index,
+                valid_ratios=valid_ratios,
+            )
+
+        # Verify outputs match
+        output_pytorch = run_pytorch_model()
+        output_export = run_exported_model()
+        output_trt = run_tensorrt_model()
+
+    tol_export = 1e-3
+    tol_trt = 1e-1
+
+    for i in range(len(output_pytorch)):
+        torch.testing.assert_close(output_pytorch[i], output_export[i], rtol=tol_export, atol=tol_export)
+        torch.testing.assert_close(output_pytorch[i], output_trt[i], rtol=tol_trt, atol=tol_trt)
+
+    benchmark_runtime(run_pytorch_model, run_exported_model, run_tensorrt_model, iterations=iterations)
+
+
+class DecoderWrapper(torch.nn.Module):
+    def __init__(self, decoder, num_reg_fcs=6):
+        super().__init__()
+        self.decoder = decoder
+
+        self.reg_branches = torch.nn.ModuleList(
+            [
+                torch.nn.Sequential(
+                    torch.nn.Linear(decoder.embed_dims, decoder.embed_dims),
+                    torch.nn.ReLU(),
+                    torch.nn.Linear(decoder.embed_dims, 4),
+                )
+                for _ in range(num_reg_fcs)
+            ]
+        )
+
+    def forward(
+        self,
+        query,
+        value=None,
+        key_padding_mask=None,
+        reference_points=None,
+        spatial_shapes=None,
+        level_start_index=None,
+        valid_ratios=None,
+    ):
+        return self.decoder(
+            query,
+            value=value,
+            key_padding_mask=key_padding_mask,
+            reference_points=reference_points,
+            spatial_shapes=spatial_shapes,
+            level_start_index=level_start_index,
+            valid_ratios=valid_ratios,
+            reg_branches=self.reg_branches,
+        )
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+def test_transformer_decoder(dtype):
+    print(f"Testing DinoTransformerDecoder with dtype={dtype}")
+
+    torch.manual_seed(42)  # For reproducibility
+
+    iterations = 3
+    device = "cuda:0"
+    optimization_level = 3  # default is 3, max is 5
+
+    cfg = Config(query_head_config)
+    decoder_cfg = cfg.transformer.decoder
+    assert decoder_cfg.pop("type") == "DinoTransformerDecoder"
+    decoder = DinoTransformerDecoder(**decoder_cfg).to(device).to(dtype)
+    model = DecoderWrapper(decoder, num_reg_fcs=decoder_cfg.num_layers).to(device).to(dtype)
+    model.eval()
+
+    # input_height = 1280
+    # input_width = 1920
+    input_height = 384
+    input_width = 384
+    in_channels = 256
+    batch_size = 1
+    downscales = [4, 8, 16, 32, 64]
+
+    mlvl_feats = []
+    feat_flatten = []
+    mask_flatten = []
+    mlvl_masks = []
+    spatial_shapes = []
+    for downscale in downscales:
+        feat_height = input_height // downscale
+        feat_width = input_width // downscale
+
+        img_feat = torch.randn(
+            batch_size, in_channels, input_height // downscale, input_width // downscale, dtype=dtype, device=device
+        )
+        # (B,C,H*W) -> (H*W,B,C)
+        img_feat_flat = img_feat.flatten(2).permute(2, 0, 1)
+        mask = torch.zeros((1, feat_height, feat_width), device=device, dtype=torch.bool)
+        mlvl_masks.append(mask)
+        mlvl_feats.append(img_feat)
+
+        feat_flatten.append(img_feat_flat)
+        mask_flatten.append(mask.flatten(1))
+        spatial_shapes.append((feat_height, feat_width))
+
+    feat_flatten = torch.cat(feat_flatten, dim=0)  # (12276,1,256)
+    mask_flatten = torch.cat(mask_flatten, dim=1)  # (1, 12276)
+
+    spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=device)
+    level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
+    valid_ratios = torch.ones((batch_size, len(downscales), 2), device=device, dtype=dtype)
+
+    num_query = 900
+    query = torch.randn(num_query, batch_size, in_channels, dtype=dtype, device=device)
+
+    # (1,12276,256), (1,12276,4)
+    _, output_proposals = get_encoder_output_proposals(
+        feat_flatten.permute(1, 0, 2), mask_flatten, mlvl_masks  # (1,12276,256)
+    )
+    # sample num_query reference points
+    spatial_len = output_proposals.shape[1]
+    sample_indices = torch.randint(0, spatial_len, (num_query,), device=device)
+    reference_points = output_proposals[:, sample_indices, :].sigmoid()
+
+    with torch.inference_mode():
+
+        def run_pytorch_model():
+            return model(
+                query,
+                value=feat_flatten,
+                key_padding_mask=mask_flatten,
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+                valid_ratios=valid_ratios,
+            )
+
+        model_export = torch.export.export(
+            model,
+            args=(query,),
+            kwargs={
+                "value": feat_flatten,
+                "key_padding_mask": mask_flatten,
+                "reference_points": reference_points,
+                "spatial_shapes": spatial_shapes,
+                "level_start_index": level_start_index,
+                "valid_ratios": valid_ratios,
+            },
+            strict=True,
+        )
+
+        print(f"✅ Exported {type(model)} to {type(model_export)} with dtype={dtype}")
+
+        def run_exported_model():
+            return model_export.module()(
+                query,
+                value=feat_flatten,
+                key_padding_mask=mask_flatten,
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+                valid_ratios=valid_ratios,
+            )
+
+        model_trt = torch_tensorrt.dynamo.compile(
+            model_export,
+            arg_inputs=(query,),
+            kwarg_inputs={
+                "value": feat_flatten,
+                "key_padding_mask": mask_flatten,
+                "reference_points": reference_points,
+                "spatial_shapes": spatial_shapes,
+                "level_start_index": level_start_index,
+                "valid_ratios": valid_ratios,
+            },
+            enabled_precisions=(dtype,),
+            optimization_level=optimization_level,
+        )
+        print(f"✅ Compiled {type(model_export)} to TensorRT with dtype={dtype}")
+
+        def run_tensorrt_model():
+            return model_trt(
+                query,
+                value=feat_flatten,
+                key_padding_mask=mask_flatten,
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes,
                 level_start_index=level_start_index,
                 valid_ratios=valid_ratios,
             )

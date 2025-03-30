@@ -160,7 +160,7 @@ class DinoTransformerDecoder(BaseModule):
         # n_query, bs, _ = pos_tensor.size()
         # sineembed_tensor = torch.zeros(n_query, bs, 256)
         scale = 2 * math.pi
-        dim_t = torch.arange(pos_feat, dtype=torch.float32, device=pos_tensor.device)
+        dim_t = torch.arange(pos_feat, dtype=pos_tensor.dtype, device=pos_tensor.device)
         dim_t = 10000 ** (2 * (dim_t // 2) / pos_feat)
         x_embed = pos_tensor[:, :, 0] * scale
         y_embed = pos_tensor[:, :, 1] * scale
@@ -298,6 +298,65 @@ def get_reference_points(mlvl_feats, valid_ratios, device):
     return reference_points
 
 
+def get_encoder_output_proposals(memory, memory_padding_mask, mlvl_masks):
+    """Generate proposals from encoded memory.
+
+    Args:
+        memory (Tensor) : The output of encoder,
+            has shape (bs, num_key, embed_dim).  num_key is
+            equal the number of points on feature map from
+            all level.
+        memory_padding_mask (Tensor): Padding mask for memory.
+            has shape (bs, num_key).
+            0 within image
+            1 in padded_region
+        mlvl_masks (list(Tensor)): The key_padding_mask from
+            different level used for encoder and decoder,
+            each element has shape  [bs, h, w].
+
+    Returns:
+        tuple: A tuple of feature map and bbox prediction.
+
+            - output_memory (Tensor): The input of decoder,  \
+                has shape (bs, num_key, embed_dim).  num_key is \
+                equal the number of points on feature map from \
+                all levels.
+            - output_proposals (Tensor): The normalized proposal \
+                after a inverse sigmoid, has shape \
+                (bs, num_keys, 4).
+    """
+    proposals = []
+    for lvl, mlvl_mask in enumerate(mlvl_masks):
+        N, H, W = mlvl_mask.shape
+        # summing the number of valid pixels (within the image, not in the padded region)
+        valid_H = torch.sum(~mlvl_mask[:, :, 0], 1)
+        valid_W = torch.sum(~mlvl_mask[:, 0, :], 1)
+
+        grid_y, grid_x = torch.meshgrid(
+            torch.linspace(0, H - 1, H, dtype=memory.dtype, device=memory.device),
+            torch.linspace(0, W - 1, W, dtype=memory.dtype, device=memory.device),
+            indexing="ij",
+        )
+        grid = torch.cat([grid_x.unsqueeze(-1), grid_y.unsqueeze(-1)], -1)
+
+        scale = torch.cat([valid_W.unsqueeze(-1), valid_H.unsqueeze(-1)], 1).view(N, 1, 1, 2)
+        grid = (grid.unsqueeze(0).expand(N, -1, -1, -1) + 0.5) / scale
+        wh = torch.ones_like(grid) * 0.05 * (2.0**lvl)
+        proposal = torch.cat((grid, wh), -1).view(N, -1, 4)
+        proposals.append(proposal)
+
+    output_proposals = torch.cat(proposals, 1)
+    output_proposals_valid = ((output_proposals > 0.01) & (output_proposals < 0.99)).all(-1, keepdim=True)
+    output_proposals = torch.log(output_proposals / (1 - output_proposals))
+    output_proposals = output_proposals.masked_fill(memory_padding_mask.unsqueeze(-1), float("inf"))
+    output_proposals = output_proposals.masked_fill(~output_proposals_valid, float("inf"))
+
+    output_memory = memory
+    output_memory = output_memory.masked_fill(memory_padding_mask.unsqueeze(-1), float(0))
+    output_memory = output_memory.masked_fill(~output_proposals_valid, float(0))
+    return output_memory, output_proposals
+
+
 class CoDinoTransformer(BaseModule):
     def __init__(
         self,
@@ -364,61 +423,7 @@ class CoDinoTransformer(BaseModule):
         nn.init.normal_(self.query_embed.weight.data)
 
     def gen_encoder_output_proposals(self, memory, memory_padding_mask, mlvl_masks):
-        """Generate proposals from encoded memory.
-
-        Args:
-            memory (Tensor) : The output of encoder,
-                has shape (bs, num_key, embed_dim).  num_key is
-                equal the number of points on feature map from
-                all level.
-            memory_padding_mask (Tensor): Padding mask for memory.
-                has shape (bs, num_key).
-                0 within image
-                1 in padded_region
-            mlvl_masks (list(Tensor)): The key_padding_mask from
-                different level used for encoder and decoder,
-                each element has shape  [bs, h, w].
-
-        Returns:
-            tuple: A tuple of feature map and bbox prediction.
-
-                - output_memory (Tensor): The input of decoder,  \
-                    has shape (bs, num_key, embed_dim).  num_key is \
-                    equal the number of points on feature map from \
-                    all levels.
-                - output_proposals (Tensor): The normalized proposal \
-                    after a inverse sigmoid, has shape \
-                    (bs, num_keys, 4).
-        """
-        proposals = []
-        for lvl, mlvl_mask in enumerate(mlvl_masks):
-            N, H, W = mlvl_mask.shape
-            # summing the number of valid pixels (within the image, not in the padded region)
-            valid_H = torch.sum(~mlvl_mask[:, :, 0], 1)
-            valid_W = torch.sum(~mlvl_mask[:, 0, :], 1)
-
-            grid_y, grid_x = torch.meshgrid(
-                torch.linspace(0, H - 1, H, dtype=memory.dtype, device=memory.device),
-                torch.linspace(0, W - 1, W, dtype=memory.dtype, device=memory.device),
-                indexing="ij",
-            )
-            grid = torch.cat([grid_x.unsqueeze(-1), grid_y.unsqueeze(-1)], -1)
-
-            scale = torch.cat([valid_W.unsqueeze(-1), valid_H.unsqueeze(-1)], 1).view(N, 1, 1, 2)
-            grid = (grid.unsqueeze(0).expand(N, -1, -1, -1) + 0.5) / scale
-            wh = torch.ones_like(grid) * 0.05 * (2.0**lvl)
-            proposal = torch.cat((grid, wh), -1).view(N, -1, 4)
-            proposals.append(proposal)
-
-        output_proposals = torch.cat(proposals, 1)
-        output_proposals_valid = ((output_proposals > 0.01) & (output_proposals < 0.99)).all(-1, keepdim=True)
-        output_proposals = torch.log(output_proposals / (1 - output_proposals))
-        output_proposals = output_proposals.masked_fill(memory_padding_mask.unsqueeze(-1), float("inf"))
-        output_proposals = output_proposals.masked_fill(~output_proposals_valid, float("inf"))
-
-        output_memory = memory
-        output_memory = output_memory.masked_fill(memory_padding_mask.unsqueeze(-1), float(0))
-        output_memory = output_memory.masked_fill(~output_proposals_valid, float(0))
+        output_memory, output_proposals = get_encoder_output_proposals(memory, memory_padding_mask, mlvl_masks)
         output_memory = self.enc_output_norm(self.enc_output(output_memory))
         return output_memory, output_proposals
 
@@ -465,7 +470,7 @@ class CoDinoTransformer(BaseModule):
         level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
         valid_ratios = torch.stack([self.get_valid_ratio(m) for m in mlvl_masks], 1)
 
-        reference_points = get_reference_points(mlvl_feats, valid_ratios, device=feat.device)
+        reference_points = get_reference_points(mlvl_feats, valid_ratios, device=feat.device)  # (1,12276,5,2)
 
         feat_flatten = feat_flatten.permute(1, 0, 2)  # (H*W, bs, embed_dims)
         lvl_pos_embed_flatten = lvl_pos_embed_flatten.permute(1, 0, 2)  # (H*W, bs, embed_dims)
