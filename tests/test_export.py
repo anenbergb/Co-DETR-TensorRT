@@ -261,10 +261,13 @@ def test_query_head(dtype):
     # this is a dummy mask where all pixels are within the image
     img_masks = torch.zeros((1, input_height, input_width), device=device, dtype=dtype)
 
-    def run_pytorch_model():
-        return model(img_feats, img_masks)
-
     with torch.inference_mode():
+
+        def run_pytorch_model():
+            return model(img_feats, img_masks)
+
+        run_pytorch_model()
+
         model_export = torch.export.export(
             model,
             args=(img_feats, img_masks),
@@ -295,13 +298,178 @@ def test_query_head(dtype):
     tol_trt = 1e-1
 
     for i in range(len(output_pytorch)):
-        if isinstance(output_pytorch[i], torch.Tensor):
-            torch.testing.assert_close(output_pytorch[i], output_export[i], rtol=tol_export, atol=tol_export)
-            torch.testing.assert_close(output_pytorch[i], output_trt[i], rtol=tol_trt, atol=tol_trt)
-        elif isinstance(output_pytorch[i], list):
-            for j in range(len(output_pytorch[i])):
-                torch.testing.assert_close(output_pytorch[i][j], output_export[i][j], rtol=tol_export, atol=tol_export)
-                torch.testing.assert_close(output_pytorch[i][j], output_trt[i][j], rtol=tol_trt, atol=tol_trt)
+        torch.testing.assert_close(output_pytorch[i], output_export[i], rtol=tol_export, atol=tol_export)
+        torch.testing.assert_close(output_pytorch[i], output_trt[i], rtol=tol_trt, atol=tol_trt)
+
+    benchmark_runtime(run_pytorch_model, run_exported_model, run_tensorrt_model, iterations=iterations)
+
+
+from codetr.transformer import DetrTransformerEncoder, get_reference_points
+
+
+class EncoderWrapper(torch.nn.Module):
+    def __init__(self, encoder):
+        super().__init__()
+        self.encoder = encoder
+
+    def forward(
+        self,
+        query,
+        query_pos=None,
+        query_key_padding_mask=None,
+        spatial_shapes=None,
+        reference_points=None,
+        level_start_index=None,
+        valid_ratios=None,
+    ):
+        return self.encoder(
+            query,
+            None,  # Handled internally
+            None,  # Handled internally
+            query_pos=query_pos,
+            query_key_padding_mask=query_key_padding_mask,
+            spatial_shapes=spatial_shapes,
+            reference_points=reference_points,
+            level_start_index=level_start_index,
+            valid_ratios=valid_ratios,
+        )
+
+
+@pytest.mark.parametrize("dtype", [torch.float32])
+def test_transformer_encoder(dtype):
+    print(f"Testing DetrTransformerEncoder with dtype={dtype}")
+
+    torch.manual_seed(42)  # For reproducibility
+
+    iterations = 3
+    device = "cuda:0"
+    optimization_level = 3  # default is 3, max is 5
+
+    cfg = Config(query_head_config)
+    encoder_cfg = cfg.transformer.encoder
+    assert encoder_cfg.pop("type") == "DetrTransformerEncoder"
+    model = DetrTransformerEncoder(**encoder_cfg).to(device).to(dtype)
+    model.to(dtype)
+    model.eval()
+
+    model = EncoderWrapper(model)
+
+    # input_height = 1280
+    # input_width = 1920
+    input_height = 384
+    input_width = 384
+    in_channels = 256
+    batch_size = 1
+    downscales = [4, 8, 16, 32, 64]
+
+    mlvl_feats = []
+    feat_flatten = []
+    mask_flatten = []
+    spatial_shapes = []
+    for downscale in downscales:
+        feat_height = input_height // downscale
+        feat_width = input_width // downscale
+
+        img_feat = torch.randn(
+            batch_size, in_channels, input_height // downscale, input_width // downscale, dtype=dtype, device=device
+        )
+        # (B,C,H*W) -> (H*W,B,C)
+        img_feat_flat = img_feat.flatten(2).permute(2, 0, 1)
+        mask = torch.zeros((1, feat_height, feat_width), device=device, dtype=torch.bool)
+
+        mlvl_feats.append(img_feat)
+        feat_flatten.append(img_feat_flat)
+        mask_flatten.append(mask.flatten(1))
+        spatial_shapes.append((feat_height, feat_width))
+
+    feat_flatten = torch.cat(feat_flatten, dim=0)  # (12276,1,256)
+    mask_flatten = torch.cat(mask_flatten, dim=1)  # (1, 12276)
+
+    spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=device)
+    level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
+    valid_ratios = torch.ones((batch_size, len(downscales), 2), device=device, dtype=dtype)
+    reference_points = get_reference_points(mlvl_feats, valid_ratios, device=device)
+
+    with torch.inference_mode():
+
+        def run_pytorch_model():
+            return model(
+                query=feat_flatten,
+                query_pos=feat_flatten,  # same shape as lvl_pos_embed_flatten
+                query_key_padding_mask=mask_flatten,
+                spatial_shapes=spatial_shapes,
+                reference_points=reference_points,
+                level_start_index=level_start_index,
+                valid_ratios=valid_ratios,
+            )
+
+        run_pytorch_model()
+
+        model_export = torch.export.export(
+            model,
+            args=(feat_flatten,),
+            kwargs={
+                "query_pos": feat_flatten,
+                "query_key_padding_mask": mask_flatten,
+                "spatial_shapes": spatial_shapes,
+                "reference_points": reference_points,
+                "level_start_index": level_start_index,
+                "valid_ratios": valid_ratios,
+            },
+            strict=True,
+        )
+
+        print(f"✅ Exported {type(model)} to {type(model_export)} with dtype={dtype}")
+
+        def run_exported_model():
+            return model_export.module()(
+                feat_flatten,
+                query_pos=feat_flatten,
+                query_key_padding_mask=mask_flatten,
+                spatial_shapes=spatial_shapes,
+                reference_points=reference_points,
+                level_start_index=level_start_index,
+                valid_ratios=valid_ratios,
+            )
+
+        model_trt = torch_tensorrt.dynamo.compile(
+            model_export,
+            arg_inputs=(feat_flatten,),
+            kwarg_inputs={
+                "query_pos": feat_flatten,
+                "query_key_padding_mask": mask_flatten,
+                "spatial_shapes": spatial_shapes,
+                "reference_points": reference_points,
+                "level_start_index": level_start_index,
+                "valid_ratios": valid_ratios,
+            },
+            enabled_precisions=(dtype,),
+            optimization_level=optimization_level,
+        )
+        print(f"✅ Compiled {type(model_export)} to TensorRT with dtype={dtype}")
+
+        def run_tensorrt_model():
+            return model_trt(
+                feat_flatten,
+                query_pos=feat_flatten,
+                query_key_padding_mask=mask_flatten,
+                spatial_shapes=spatial_shapes,
+                reference_points=reference_points,
+                level_start_index=level_start_index,
+                valid_ratios=valid_ratios,
+            )
+
+        # Verify outputs match
+        output_pytorch = run_pytorch_model()
+        output_export = run_exported_model()
+        output_trt = run_tensorrt_model()
+
+    tol_export = 1e-3
+    tol_trt = 1e-1
+
+    for i in range(len(output_pytorch)):
+        torch.testing.assert_close(output_pytorch[i], output_export[i], rtol=tol_export, atol=tol_export)
+        torch.testing.assert_close(output_pytorch[i], output_trt[i], rtol=tol_trt, atol=tol_trt)
 
     benchmark_runtime(run_pytorch_model, run_exported_model, run_tensorrt_model, iterations=iterations)
 

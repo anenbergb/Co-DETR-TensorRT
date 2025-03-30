@@ -18,7 +18,6 @@ except Exception:
 
 
 from codetr.transformer_mmcv import BaseTransformerLayer
-
 from codetr.multi_scale_deformable_attention import MultiScaleDeformableAttention
 
 
@@ -437,16 +436,12 @@ class CoDinoTransformer(BaseModule):
         self,
         mlvl_feats,
         mlvl_masks,
-        query_embed,
         mlvl_pos_embeds,
-        dn_label_query,
-        dn_bbox_query,
-        attn_mask,
         reg_branches=None,
         cls_branches=None,
         **kwargs,
     ):
-        assert self.as_two_stage and query_embed is None, "as_two_stage must be True for DINO"
+        assert self.as_two_stage, "as_two_stage must be True for DINO"
 
         feat_flatten = []
         mask_flatten = []
@@ -502,16 +497,8 @@ class CoDinoTransformer(BaseModule):
         topk_coords_unact = topk_coords_unact.detach()
 
         query = self.query_embed.weight[:, None, :].repeat(1, bs, 1).transpose(0, 1)
-        # NOTE the query_embed here is not spatial query as in DETR.
-        # It is actually content query, which is named tgt in other
-        # DETR-like models
-        if dn_label_query is not None:
-            query = torch.cat([dn_label_query, query], dim=1)
-        if dn_bbox_query is not None:
-            reference_points = torch.cat([dn_bbox_query, topk_coords_unact], dim=1)
-        else:
-            reference_points = topk_coords_unact
-        reference_points = reference_points.sigmoid()
+
+        reference_points = topk_coords_unact.sigmoid()
         # decoder
         query = query.permute(1, 0, 2)
         memory = memory.permute(1, 0, 2)
@@ -521,7 +508,7 @@ class CoDinoTransformer(BaseModule):
             query=query,
             key=None,
             value=memory,
-            attn_masks=attn_mask,
+            attn_masks=None,
             key_padding_mask=mask_flatten,
             reference_points=reference_points,
             spatial_shapes=spatial_shapes,

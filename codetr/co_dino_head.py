@@ -118,22 +118,15 @@ class CoDINOHead(DINOHead):
             mlvl_masks.append(F.interpolate(img_masks[None], size=feat.shape[-2:]).to(torch.bool).squeeze(0))
             mlvl_positional_encodings.append(self.positional_encoding(mlvl_masks[-1]))
 
-        query_embeds = None
-        # hs, inter_references, topk_score, topk_anchor, enc_outputs =
         # (1,900,256), (1,900,256)
         final_decoder_state, final_decoder_references = self.transformer(
             mlvl_feats,
             mlvl_masks,
-            query_embeds,
             mlvl_positional_encodings,
-            None,
-            None,
-            None,
             reg_branches=self.reg_branches if self.with_box_refine else None,  # noqa:E501
             cls_branches=self.cls_branches if self.as_two_stage else None,  # noqa:E501
         )
 
-        # is this 6 or 7?
         lvl = len(self.transformer.decoder.layers) - 1
         reference = inverse_sigmoid(final_decoder_references, eps=1e-3)
         outputs_classes = self.cls_branches[lvl](final_decoder_state)
