@@ -186,7 +186,9 @@ class DinoTransformerDecoder(BaseModule):
 
     def forward(self, query, *args, reference_points=None, valid_ratios=None, reg_branches=None, **kwargs):
         """
-        Updated to not return interemediate results
+        Updated to not return intermediate results
+
+        reference_points are unactivated (to avoid inverse_sigmoid)
         """
 
         output = query
@@ -208,10 +210,6 @@ class DinoTransformerDecoder(BaseModule):
             if reg_branches is not None:
                 tmp = reg_branches[lid](output.permute(1, 0, 2))
                 assert reference_points.shape[-1] == 4
-                # new_reference_points = tmp + inverse_sigmoid(reference_points, eps=1e-3)
-                # new_reference_points = new_reference_points.sigmoid()
-                # reference_points = new_reference_points.detach()
-
                 reference_points = tmp + reference_points
 
         output = output.permute(1, 0, 2)  # (900,1,256) -> (1,900,256)
@@ -301,7 +299,7 @@ def get_reference_points(mlvl_feats, valid_ratios, device):
     return reference_points
 
 
-def get_encoder_output_proposals(memory, memory_padding_mask, reference_points, level_counts):
+def make_encoder_output_proposals(reference_points, level_counts):
     """Generate proposals from encoded memory.
 
     Args:
@@ -313,9 +311,6 @@ def get_encoder_output_proposals(memory, memory_padding_mask, reference_points, 
             has shape (bs, num_key).
             0 within image
             1 in padded_region
-        mlvl_masks (list(Tensor)): The key_padding_mask from
-            different level used for encoder and decoder,
-            each element has shape  [bs, h, w].
 
     Returns:
         tuple: A tuple of feature map and bbox prediction.
@@ -330,25 +325,27 @@ def get_encoder_output_proposals(memory, memory_padding_mask, reference_points, 
     """
 
     # Create values tensor [0, 1, 2, 3, 4]
-    lvl_indices = torch.arange(level_counts.shape[0], dtype=memory.dtype, device=memory.device)
+    lvl_indices = torch.arange(level_counts.shape[0], dtype=reference_points.dtype, device=reference_points.device)
     # Repeat each value based on its count
     lvl_repeated = torch.repeat_interleave(lvl_indices, level_counts)  # (num_keys,)
     width = 0.05 * (2.0**lvl_repeated)  # (num_keys,)
     width = width.view(1, -1, 1)  # (1,num_keys,1)
-
     # reference points (bs,num_keys,2)
     output_proposals = torch.cat([reference_points, width, width], dim=-1)  # (bs,num_keys,4)
-
-    output_proposals_valid = ((output_proposals > 0.01) & (output_proposals < 0.99)).all(-1, keepdim=True)
     output_proposals = torch.log(output_proposals / (1 - output_proposals))
-    # import pytest; pytest.set_trace()s
+    return output_proposals
+
+
+def apply_mask_to_proposal_and_memory(output_proposals, memory, memory_padding_mask):
+    # log(0.1 / (1 - 0.1)) = -4.6
+    # log(0.99 / (1 - 0.99)) = 4.6
+    output_proposals_valid = ((output_proposals > -4.6) & (output_proposals < 4.6)).all(-1, keepdim=True)
     output_proposals = output_proposals.masked_fill(memory_padding_mask.unsqueeze(-1), float("inf"))
     output_proposals = output_proposals.masked_fill(~output_proposals_valid, float("inf"))
 
-    output_memory = memory
-    output_memory = output_memory.masked_fill(memory_padding_mask.unsqueeze(-1), float(0))
+    output_memory = memory.masked_fill(memory_padding_mask.unsqueeze(-1), float(0))
     output_memory = output_memory.masked_fill(~output_proposals_valid, float(0))
-    return output_memory, output_proposals
+    return output_proposals, output_memory
 
 
 class CoDinoTransformer(BaseModule):
@@ -416,13 +413,6 @@ class CoDinoTransformer(BaseModule):
         normal_(self.level_embeds)
         nn.init.normal_(self.query_embed.weight.data)
 
-    def gen_encoder_output_proposals(self, memory, memory_padding_mask, reference_points, level_counts):
-        output_memory, output_proposals = get_encoder_output_proposals(
-            memory, memory_padding_mask, reference_points, level_counts
-        )
-        output_memory = self.enc_output_norm(self.enc_output(output_memory))
-        return output_memory, output_proposals
-
     def get_valid_ratio(self, mask):
         """Get the valid ratios of feature maps of all level."""
         _, H, W = mask.shape
@@ -467,13 +457,11 @@ class CoDinoTransformer(BaseModule):
         level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), level_counts.cumsum(0)[:-1]))
         valid_ratios = torch.stack([self.get_valid_ratio(m) for m in mlvl_masks], 1)
 
-        # import pytest; pytest.set_trace()
         reference_points = get_reference_points(mlvl_feats, valid_ratios, device=feat.device)  # (1,12276,5,2)
         # (bs,num_keys,2) * (bs,num_levels,2)
         # (bs,num_keys,1,2) * (bs,1,num_levels,2) -> (bs,num_keys,num_levels,2)
         reference_points_by_level = reference_points[:, :, None] * valid_ratios[:, None]
 
-        # pytest.set_trace()
         feat_flatten = feat_flatten.permute(1, 0, 2)  # (H*W, bs, embed_dims)
         lvl_pos_embed_flatten = lvl_pos_embed_flatten.permute(1, 0, 2)  # (H*W, bs, embed_dims)
         memory = self.encoder(
@@ -491,9 +479,10 @@ class CoDinoTransformer(BaseModule):
         memory = memory.permute(1, 0, 2)
         bs, _, c = memory.shape
 
-        output_memory, output_proposals = self.gen_encoder_output_proposals(
-            memory, mask_flatten, reference_points, level_counts
-        )
+        output_proposals = make_encoder_output_proposals(reference_points, level_counts)
+        output_proposals, output_memory = apply_mask_to_proposal_and_memory(output_proposals, memory, mask_flatten)
+        output_memory = self.enc_output_norm(self.enc_output(output_memory))
+
         # decoder num_layers = 6, but # cls_branches = 7, so cls_branches[6] is the final classification branch
         enc_outputs_class = cls_branches[self.decoder.num_layers](output_memory)
         enc_outputs_coord_unact = reg_branches[self.decoder.num_layers](output_memory) + output_proposals
@@ -501,14 +490,8 @@ class CoDinoTransformer(BaseModule):
         topk = self.two_stage_num_proposals
         # NOTE In DeformDETR, enc_outputs_class[..., 0] is used for topk
         topk_indices = torch.topk(enc_outputs_class.max(-1)[0], topk, dim=1)[1]
-
         topk_coords_unact = torch.gather(enc_outputs_coord_unact, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 4))
-        topk_coords_unact = topk_coords_unact.detach()
-
         query = self.query_embed.weight[:, None, :].repeat(1, bs, 1).transpose(0, 1)
-
-        # reference_points = topk_coords_unact.sigmoid()
-        reference_points = topk_coords_unact
 
         # decoder
         query = query.permute(1, 0, 2)
@@ -521,7 +504,7 @@ class CoDinoTransformer(BaseModule):
             value=memory,
             attn_masks=None,
             key_padding_mask=mask_flatten,
-            reference_points=reference_points,
+            reference_points=topk_coords_unact,
             spatial_shapes=spatial_shapes,
             level_start_index=level_start_index,
             valid_ratios=valid_ratios,

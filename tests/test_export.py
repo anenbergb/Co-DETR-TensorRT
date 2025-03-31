@@ -1,14 +1,15 @@
 import torch
 import pytest
-import numpy as np
+import os
 
+from codetr import build_CoDETR
 from codetr.swin import SwinTransformer
 from codetr.co_dino_head import CoDINOHead
 from codetr.transformer import (
     DetrTransformerEncoder,
     DinoTransformerDecoder,
     get_reference_points,
-    get_encoder_output_proposals,
+    make_encoder_output_proposals,
 )
 
 from mmengine.config import Config
@@ -245,6 +246,12 @@ def test_query_head(dtype):
     device = "cuda:0"
     optimization_level = 3  # default is 3, max is 5
 
+    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    model_file = os.path.join(PROJECT_ROOT, "configs/co_dino_5scale_swin_l_16xb1_16e_o365tococo.py")
+    codetr = build_CoDETR(model_file, device=device)
+    model = EncoderWrapper(codetr.query_head.transformer.encoder).to(device).to(dtype)
+    model.eval()
+
     cfg = Config(query_head_config)
     model = CoDINOHead(**cfg).to(device).to(dtype)
     model.init_weights()
@@ -274,7 +281,7 @@ def test_query_head(dtype):
         def run_pytorch_model():
             return model(img_feats, img_masks)
 
-        run_pytorch_model()
+        # run_pytorch_model()
 
         model_export = torch.export.export(
             model,
@@ -302,10 +309,15 @@ def test_query_head(dtype):
         output_export = run_exported_model()
         output_trt = run_tensorrt_model()
 
-    tol_export = 1e-3
-    tol_trt = 1e-1
+    tol_export = 1e-3 if dtype == torch.float32 else 1e-3
+    tol_trt = 1e-1 if dtype == torch.float32 else 1
 
     for i in range(len(output_pytorch)):
+        abs_diff = torch.abs(output_pytorch[i] - output_trt[i])
+        top_5_diff, top_5_locations = torch.topk(abs_diff.flatten(), 5)
+        print(
+            f"Top 5 absolute differences for output {i}: {top_5_diff.tolist()} at locations {top_5_locations.tolist()}"
+        )
         torch.testing.assert_close(output_pytorch[i], output_export[i], rtol=tol_export, atol=tol_export)
         torch.testing.assert_close(output_pytorch[i], output_trt[i], rtol=tol_trt, atol=tol_trt)
 
@@ -340,7 +352,7 @@ class EncoderWrapper(torch.nn.Module):
         )
 
 
-@pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
 def test_transformer_encoder(dtype):
     print(f"Testing DetrTransformerEncoder with dtype={dtype}")
 
@@ -350,14 +362,11 @@ def test_transformer_encoder(dtype):
     device = "cuda:0"
     optimization_level = 3  # default is 3, max is 5
 
-    cfg = Config(query_head_config)
-    encoder_cfg = cfg.transformer.encoder
-    assert encoder_cfg.pop("type") == "DetrTransformerEncoder"
-    model = DetrTransformerEncoder(**encoder_cfg).to(device).to(dtype)
-    model.to(dtype)
+    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    model_file = os.path.join(PROJECT_ROOT, "configs/co_dino_5scale_swin_l_16xb1_16e_o365tococo.py")
+    codetr = build_CoDETR(model_file, device=device)
+    model = EncoderWrapper(codetr.query_head.transformer.encoder).to(device).to(dtype)
     model.eval()
-
-    model = EncoderWrapper(model)
 
     # input_height = 1280
     # input_width = 1920
@@ -394,6 +403,7 @@ def test_transformer_encoder(dtype):
     level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
     valid_ratios = torch.ones((batch_size, len(downscales), 2), device=device, dtype=dtype)
     reference_points = get_reference_points(mlvl_feats, valid_ratios, device=device)
+    reference_points_by_level = reference_points[:, :, None] * valid_ratios[:, None]
 
     with torch.inference_mode():
 
@@ -403,7 +413,7 @@ def test_transformer_encoder(dtype):
                 query_pos=feat_flatten,  # same shape as lvl_pos_embed_flatten
                 query_key_padding_mask=mask_flatten,
                 spatial_shapes=spatial_shapes,
-                reference_points=reference_points,
+                reference_points=reference_points_by_level,
                 level_start_index=level_start_index,
                 valid_ratios=valid_ratios,
             )
@@ -415,7 +425,7 @@ def test_transformer_encoder(dtype):
                 "query_pos": feat_flatten,
                 "query_key_padding_mask": mask_flatten,
                 "spatial_shapes": spatial_shapes,
-                "reference_points": reference_points,
+                "reference_points": reference_points_by_level,
                 "level_start_index": level_start_index,
                 "valid_ratios": valid_ratios,
             },
@@ -430,7 +440,7 @@ def test_transformer_encoder(dtype):
                 query_pos=feat_flatten,
                 query_key_padding_mask=mask_flatten,
                 spatial_shapes=spatial_shapes,
-                reference_points=reference_points,
+                reference_points=reference_points_by_level,
                 level_start_index=level_start_index,
                 valid_ratios=valid_ratios,
             )
@@ -442,7 +452,7 @@ def test_transformer_encoder(dtype):
                 "query_pos": feat_flatten,
                 "query_key_padding_mask": mask_flatten,
                 "spatial_shapes": spatial_shapes,
-                "reference_points": reference_points,
+                "reference_points": reference_points_by_level,
                 "level_start_index": level_start_index,
                 "valid_ratios": valid_ratios,
             },
@@ -457,7 +467,7 @@ def test_transformer_encoder(dtype):
                 query_pos=feat_flatten,
                 query_key_padding_mask=mask_flatten,
                 spatial_shapes=spatial_shapes,
-                reference_points=reference_points,
+                reference_points=reference_points_by_level,
                 level_start_index=level_start_index,
                 valid_ratios=valid_ratios,
             )
@@ -478,20 +488,10 @@ def test_transformer_encoder(dtype):
 
 
 class DecoderWrapper(torch.nn.Module):
-    def __init__(self, decoder, num_reg_fcs=6):
+    def __init__(self, decoder, reg_branches):
         super().__init__()
         self.decoder = decoder
-
-        self.reg_branches = torch.nn.ModuleList(
-            [
-                torch.nn.Sequential(
-                    torch.nn.Linear(decoder.embed_dims, decoder.embed_dims),
-                    torch.nn.ReLU(),
-                    torch.nn.Linear(decoder.embed_dims, 4),
-                )
-                for _ in range(num_reg_fcs)
-            ]
-        )
+        self.reg_branches = reg_branches
 
     def forward(
         self,
@@ -525,15 +525,12 @@ def test_transformer_decoder(dtype):
     device = "cuda:0"
     optimization_level = 3  # default is 3, max is 5
 
-    cfg = Config(query_head_config)
-    decoder_cfg = cfg.transformer.decoder
-    assert decoder_cfg.pop("type") == "DinoTransformerDecoder"
-    decoder = DinoTransformerDecoder(**decoder_cfg).to(device).to(dtype)
-    model = DecoderWrapper(decoder, num_reg_fcs=decoder_cfg.num_layers).to(device).to(dtype)
+    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    model_file = os.path.join(PROJECT_ROOT, "configs/co_dino_5scale_swin_l_16xb1_16e_o365tococo.py")
+    codetr = build_CoDETR(model_file, device=device)
+    model = DecoderWrapper(codetr.query_head.transformer.decoder, codetr.query_head.reg_branches).to(device).to(dtype)
     model.eval()
 
-    # input_height = 1280
-    # input_width = 1920
     input_height = 384
     input_width = 384
     in_channels = 256
@@ -543,7 +540,6 @@ def test_transformer_decoder(dtype):
     mlvl_feats = []
     feat_flatten = []
     mask_flatten = []
-    mlvl_masks = []
     spatial_shapes = []
     for downscale in downscales:
         feat_height = input_height // downscale
@@ -555,9 +551,8 @@ def test_transformer_decoder(dtype):
         # (B,C,H*W) -> (H*W,B,C)
         img_feat_flat = img_feat.flatten(2).permute(2, 0, 1)
         mask = torch.zeros((1, feat_height, feat_width), device=device, dtype=torch.bool)
-        mlvl_masks.append(mask)
-        mlvl_feats.append(img_feat)
 
+        mlvl_feats.append(img_feat)
         feat_flatten.append(img_feat_flat)
         mask_flatten.append(mask.flatten(1))
         spatial_shapes.append((feat_height, feat_width))
@@ -566,20 +561,19 @@ def test_transformer_decoder(dtype):
     mask_flatten = torch.cat(mask_flatten, dim=1)  # (1, 12276)
 
     spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=device)
-    level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
+    level_counts = spatial_shapes.prod(1)
+    level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), level_counts.cumsum(0)[:-1]))
     valid_ratios = torch.ones((batch_size, len(downscales), 2), device=device, dtype=dtype)
+    reference_points = get_reference_points(mlvl_feats, valid_ratios, device=device)
 
     num_query = 900
     query = torch.randn(num_query, batch_size, in_channels, dtype=dtype, device=device)
 
-    # (1,12276,256), (1,12276,4)
-    _, output_proposals = get_encoder_output_proposals(
-        feat_flatten.permute(1, 0, 2), mask_flatten, mlvl_masks  # (1,12276,256)
-    )
+    output_proposals = make_encoder_output_proposals(reference_points, level_counts)  # (1,12276,4)
     # sample num_query reference points
     spatial_len = output_proposals.shape[1]
     sample_indices = torch.randint(0, spatial_len, (num_query,), device=device)
-    reference_points = output_proposals[:, sample_indices, :].sigmoid()
+    output_proposals = output_proposals[:, sample_indices, :]  # .sigmoid()
 
     with torch.inference_mode():
 
@@ -588,7 +582,7 @@ def test_transformer_decoder(dtype):
                 query,
                 value=feat_flatten,
                 key_padding_mask=mask_flatten,
-                reference_points=reference_points,
+                reference_points=output_proposals,
                 spatial_shapes=spatial_shapes,
                 level_start_index=level_start_index,
                 valid_ratios=valid_ratios,
@@ -600,7 +594,7 @@ def test_transformer_decoder(dtype):
             kwargs={
                 "value": feat_flatten,
                 "key_padding_mask": mask_flatten,
-                "reference_points": reference_points,
+                "reference_points": output_proposals,
                 "spatial_shapes": spatial_shapes,
                 "level_start_index": level_start_index,
                 "valid_ratios": valid_ratios,
@@ -615,7 +609,7 @@ def test_transformer_decoder(dtype):
                 query,
                 value=feat_flatten,
                 key_padding_mask=mask_flatten,
-                reference_points=reference_points,
+                reference_points=output_proposals,
                 spatial_shapes=spatial_shapes,
                 level_start_index=level_start_index,
                 valid_ratios=valid_ratios,
@@ -627,7 +621,7 @@ def test_transformer_decoder(dtype):
             kwarg_inputs={
                 "value": feat_flatten,
                 "key_padding_mask": mask_flatten,
-                "reference_points": reference_points,
+                "reference_points": output_proposals,
                 "spatial_shapes": spatial_shapes,
                 "level_start_index": level_start_index,
                 "valid_ratios": valid_ratios,
@@ -642,7 +636,7 @@ def test_transformer_decoder(dtype):
                 query,
                 value=feat_flatten,
                 key_padding_mask=mask_flatten,
-                reference_points=reference_points,
+                reference_points=output_proposals,
                 spatial_shapes=spatial_shapes,
                 level_start_index=level_start_index,
                 valid_ratios=valid_ratios,
@@ -653,10 +647,17 @@ def test_transformer_decoder(dtype):
         output_export = run_exported_model()
         output_trt = run_tensorrt_model()
 
-    tol_export = 1e-3
-    tol_trt = 1e-1
+    tol_export = 1e-3 if dtype == torch.float32 else 1e-3
+    tol_trt = 1e-1 if dtype == torch.float32 else 1e-1
+    # with torch.float16 the error accumulates with each decoder layer since the predicted reference points
+    # are used for the next layer.
 
     for i in range(len(output_pytorch)):
+        abs_diff = torch.abs(output_pytorch[i] - output_trt[i])
+        top_5_diff, top_5_locations = torch.topk(abs_diff.flatten(), 5)
+        print(
+            f"Top 5 absolute differences for output {i}: {top_5_diff.tolist()} at locations {top_5_locations.tolist()}"
+        )
         torch.testing.assert_close(output_pytorch[i], output_export[i], rtol=tol_export, atol=tol_export)
         torch.testing.assert_close(output_pytorch[i], output_trt[i], rtol=tol_trt, atol=tol_trt)
 

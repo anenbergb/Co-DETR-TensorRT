@@ -1,5 +1,5 @@
 import copy
-from typing import Tuple, Union
+from typing import Tuple, Union, Optional
 import warnings
 
 import torch
@@ -140,10 +140,9 @@ def get_dataset_meta(checkpoint):
     return dataset_meta
 
 
-def build_CoDETR(model_file: str, weights_file: str, device: str = "cuda") -> CoDETR:
+def build_CoDETR(model_file: str, weights_file: Optional[str] = None, device: str = "cuda") -> CoDETR:
     """Build CoDETR model from model file and weights file."""
     cfg = Config.fromfile(model_file)
-    checkpoint = _load_checkpoint(weights_file, map_location="cpu")
     # Delete the `pretrained` field to prevent model from loading the
     # the pretrained weights unnecessarily.
     if cfg.model.get("pretrained") is not None:
@@ -151,6 +150,11 @@ def build_CoDETR(model_file: str, weights_file: str, device: str = "cuda") -> Co
     assert cfg.model.pop("type") == "CoDETR"
     model = CoDETR(**cfg.model)
     model.cfg = cfg
+    if weights_file is None:
+        model.to(device)
+        model.eval()
+        return model
+    checkpoint = _load_checkpoint(weights_file, map_location="cpu")
     _load_checkpoint_to_model(model, checkpoint)
     model.to(device)
     model.eval()
