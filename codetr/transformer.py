@@ -39,7 +39,7 @@ class DetrTransformerEncoder(BaseModule):
     ):
         super().__init__(init_cfg)
         assert isinstance(transformerlayers, dict)
-        assert transformerlayers.pop("type") is "BaseTransformerLayer"
+        assert transformerlayers.pop("type") == "BaseTransformerLayer"
         self.num_layers = num_layers
         self.layers = nn.ModuleList()
         for i in range(num_layers):
@@ -140,7 +140,7 @@ class DinoTransformerDecoder(BaseModule):
     ):
         super().__init__(init_cfg)
         assert isinstance(transformerlayers, dict)
-        assert transformerlayers.pop("type") is "DetrTransformerDecoderLayer"
+        assert transformerlayers.pop("type") == "DetrTransformerDecoderLayer"
         self.num_layers = num_layers
         self.layers = nn.ModuleList()
         for i in range(num_layers):
@@ -188,15 +188,16 @@ class DinoTransformerDecoder(BaseModule):
         """
         Updated to not return interemediate results
         """
+
         output = query
         for lid, layer in enumerate(self.layers):
             if reference_points.shape[-1] == 4:
                 reference_points_input = (
-                    reference_points[:, :, None] * torch.cat([valid_ratios, valid_ratios], -1)[:, None]
+                    reference_points[:, :, None].sigmoid() * torch.cat([valid_ratios, valid_ratios], -1)[:, None]
                 )
             else:
                 assert reference_points.shape[-1] == 2
-                reference_points_input = reference_points[:, :, None] * valid_ratios[:, None]
+                reference_points_input = reference_points[:, :, None].sigmoid() * valid_ratios[:, None]
 
             query_sine_embed = self.gen_sineembed_for_position(reference_points_input[:, :, 0, :], self.embed_dims // 2)
             query_pos = self.ref_point_head(query_sine_embed)  # (1,900,256)
@@ -207,9 +208,11 @@ class DinoTransformerDecoder(BaseModule):
             if reg_branches is not None:
                 tmp = reg_branches[lid](output.permute(1, 0, 2))
                 assert reference_points.shape[-1] == 4
-                new_reference_points = tmp + inverse_sigmoid(reference_points, eps=1e-3)
-                new_reference_points = new_reference_points.sigmoid()
-                reference_points = new_reference_points.detach()
+                # new_reference_points = tmp + inverse_sigmoid(reference_points, eps=1e-3)
+                # new_reference_points = new_reference_points.sigmoid()
+                # reference_points = new_reference_points.detach()
+
+                reference_points = tmp + reference_points
 
         output = output.permute(1, 0, 2)  # (900,1,256) -> (1,900,256)
         output = self.norm(output)
@@ -270,7 +273,7 @@ def get_reference_points(mlvl_feats, valid_ratios, device):
         mlvl_feats (list[Tensor]): The feature maps from different
             levels, each has shape (bs, embed_dims, h, w).
     
-        valid_ratios (Tensor): The radios of valid
+        valid_ratios (Tensor): The ratios of valid
             points on the feature map, has shape
             (bs, num_levels, 2)
         device (obj:`device`): The device where
@@ -283,22 +286,22 @@ def get_reference_points(mlvl_feats, valid_ratios, device):
 
     reference_points_list = []
     for lvl, feat in enumerate(mlvl_feats):
-        _, _, H, W = feat.shape
-        ref_y, ref_x = torch.meshgrid(
+        bs, _, H, W = feat.shape
+        ref_y1, ref_x1 = torch.meshgrid(
             torch.linspace(0.5, H - 0.5, H, dtype=feat.dtype, device=device),
             torch.linspace(0.5, W - 0.5, W, dtype=feat.dtype, device=device),
             indexing="ij",
         )
-        ref_y = ref_y.reshape(-1)[None] / (valid_ratios[:, None, lvl, 1] * H)
-        ref_x = ref_x.reshape(-1)[None] / (valid_ratios[:, None, lvl, 0] * W)
+        ref_y = ref_y1.reshape(1, -1) / (valid_ratios[:, lvl, 1].reshape(bs, 1) * H)
+        ref_x = ref_x1.reshape(1, -1) / (valid_ratios[:, lvl, 0].reshape(bs, 1) * W)
         ref = torch.stack((ref_x, ref_y), -1)
         reference_points_list.append(ref)
+    # (bs,num_keys,2)
     reference_points = torch.cat(reference_points_list, 1)
-    reference_points = reference_points[:, :, None] * valid_ratios[:, None]
     return reference_points
 
 
-def get_encoder_output_proposals(memory, memory_padding_mask, mlvl_masks):
+def get_encoder_output_proposals(memory, memory_padding_mask, reference_points, level_counts):
     """Generate proposals from encoded memory.
 
     Args:
@@ -325,29 +328,20 @@ def get_encoder_output_proposals(memory, memory_padding_mask, mlvl_masks):
                 after a inverse sigmoid, has shape \
                 (bs, num_keys, 4).
     """
-    proposals = []
-    for lvl, mlvl_mask in enumerate(mlvl_masks):
-        N, H, W = mlvl_mask.shape
-        # summing the number of valid pixels (within the image, not in the padded region)
-        valid_H = torch.sum(~mlvl_mask[:, :, 0], 1)
-        valid_W = torch.sum(~mlvl_mask[:, 0, :], 1)
 
-        grid_y, grid_x = torch.meshgrid(
-            torch.linspace(0, H - 1, H, dtype=memory.dtype, device=memory.device),
-            torch.linspace(0, W - 1, W, dtype=memory.dtype, device=memory.device),
-            indexing="ij",
-        )
-        grid = torch.cat([grid_x.unsqueeze(-1), grid_y.unsqueeze(-1)], -1)
+    # Create values tensor [0, 1, 2, 3, 4]
+    lvl_indices = torch.arange(level_counts.shape[0], dtype=memory.dtype, device=memory.device)
+    # Repeat each value based on its count
+    lvl_repeated = torch.repeat_interleave(lvl_indices, level_counts)  # (num_keys,)
+    width = 0.05 * (2.0**lvl_repeated)  # (num_keys,)
+    width = width.view(1, -1, 1)  # (1,num_keys,1)
 
-        scale = torch.cat([valid_W.unsqueeze(-1), valid_H.unsqueeze(-1)], 1).view(N, 1, 1, 2)
-        grid = (grid.unsqueeze(0).expand(N, -1, -1, -1) + 0.5) / scale
-        wh = torch.ones_like(grid) * 0.05 * (2.0**lvl)
-        proposal = torch.cat((grid, wh), -1).view(N, -1, 4)
-        proposals.append(proposal)
+    # reference points (bs,num_keys,2)
+    output_proposals = torch.cat([reference_points, width, width], dim=-1)  # (bs,num_keys,4)
 
-    output_proposals = torch.cat(proposals, 1)
     output_proposals_valid = ((output_proposals > 0.01) & (output_proposals < 0.99)).all(-1, keepdim=True)
     output_proposals = torch.log(output_proposals / (1 - output_proposals))
+    # import pytest; pytest.set_trace()s
     output_proposals = output_proposals.masked_fill(memory_padding_mask.unsqueeze(-1), float("inf"))
     output_proposals = output_proposals.masked_fill(~output_proposals_valid, float("inf"))
 
@@ -422,13 +416,15 @@ class CoDinoTransformer(BaseModule):
         normal_(self.level_embeds)
         nn.init.normal_(self.query_embed.weight.data)
 
-    def gen_encoder_output_proposals(self, memory, memory_padding_mask, mlvl_masks):
-        output_memory, output_proposals = get_encoder_output_proposals(memory, memory_padding_mask, mlvl_masks)
+    def gen_encoder_output_proposals(self, memory, memory_padding_mask, reference_points, level_counts):
+        output_memory, output_proposals = get_encoder_output_proposals(
+            memory, memory_padding_mask, reference_points, level_counts
+        )
         output_memory = self.enc_output_norm(self.enc_output(output_memory))
         return output_memory, output_proposals
 
     def get_valid_ratio(self, mask):
-        """Get the valid ratios of feature maps of all  level."""
+        """Get the valid ratios of feature maps of all level."""
         _, H, W = mask.shape
         valid_H = torch.sum(~mask[:, :, 0], 1)
         valid_W = torch.sum(~mask[:, 0, :], 1)
@@ -467,11 +463,17 @@ class CoDinoTransformer(BaseModule):
         mask_flatten = torch.cat(mask_flatten, 1)
         lvl_pos_embed_flatten = torch.cat(lvl_pos_embed_flatten, 1)
         spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=feat_flatten.device)
-        level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
+        level_counts = spatial_shapes.prod(1)
+        level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), level_counts.cumsum(0)[:-1]))
         valid_ratios = torch.stack([self.get_valid_ratio(m) for m in mlvl_masks], 1)
 
+        # import pytest; pytest.set_trace()
         reference_points = get_reference_points(mlvl_feats, valid_ratios, device=feat.device)  # (1,12276,5,2)
+        # (bs,num_keys,2) * (bs,num_levels,2)
+        # (bs,num_keys,1,2) * (bs,1,num_levels,2) -> (bs,num_keys,num_levels,2)
+        reference_points_by_level = reference_points[:, :, None] * valid_ratios[:, None]
 
+        # pytest.set_trace()
         feat_flatten = feat_flatten.permute(1, 0, 2)  # (H*W, bs, embed_dims)
         lvl_pos_embed_flatten = lvl_pos_embed_flatten.permute(1, 0, 2)  # (H*W, bs, embed_dims)
         memory = self.encoder(
@@ -481,7 +483,7 @@ class CoDinoTransformer(BaseModule):
             query_pos=lvl_pos_embed_flatten,
             query_key_padding_mask=mask_flatten,
             spatial_shapes=spatial_shapes,
-            reference_points=reference_points,
+            reference_points=reference_points_by_level,
             level_start_index=level_start_index,
             valid_ratios=valid_ratios,
             **kwargs,
@@ -489,7 +491,9 @@ class CoDinoTransformer(BaseModule):
         memory = memory.permute(1, 0, 2)
         bs, _, c = memory.shape
 
-        output_memory, output_proposals = self.gen_encoder_output_proposals(memory, mask_flatten, mlvl_masks)
+        output_memory, output_proposals = self.gen_encoder_output_proposals(
+            memory, mask_flatten, reference_points, level_counts
+        )
         # decoder num_layers = 6, but # cls_branches = 7, so cls_branches[6] is the final classification branch
         enc_outputs_class = cls_branches[self.decoder.num_layers](output_memory)
         enc_outputs_coord_unact = reg_branches[self.decoder.num_layers](output_memory) + output_proposals
@@ -503,7 +507,9 @@ class CoDinoTransformer(BaseModule):
 
         query = self.query_embed.weight[:, None, :].repeat(1, bs, 1).transpose(0, 1)
 
-        reference_points = topk_coords_unact.sigmoid()
+        # reference_points = topk_coords_unact.sigmoid()
+        reference_points = topk_coords_unact
+
         # decoder
         query = query.permute(1, 0, 2)
         memory = memory.permute(1, 0, 2)
@@ -522,4 +528,4 @@ class CoDinoTransformer(BaseModule):
             reg_branches=reg_branches,
             **kwargs,
         )
-        return final_state, final_references
+        return final_state, final_references.sigmoid()
