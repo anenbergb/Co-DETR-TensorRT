@@ -101,13 +101,14 @@ class CoDETR(nn.Module):
                 img_metas["img_shape"] = [input_img_h, input_img_w]
 
         # (bs,dim,H,W) -> List[ (bs,dim,H,W), ...]
+        image_height, image_width = batch_inputs.shape[2:]
         image_feats = self.backbone(batch_inputs)
         image_feats = self.neck(image_feats)
-        results_list = self.predict_query_head(image_feats, batch_data_samples, rescale=rescale)
+        results_list = self.predict_query_head(image_feats, batch_data_samples, image_height, image_width)
         return results_list
 
     def predict_query_head(
-        self, mlvl_feats: Tuple[Tensor], batch_data_samples: SampleList, rescale: bool = True
+        self, mlvl_feats: Tuple[Tensor], batch_data_samples: SampleList, image_height: int, image_width: int
     ) -> InstanceList:
         img_h, img_w = batch_data_samples[0].img_shape
         unpad_h, unpad_w = batch_data_samples[0].img_unpadded_shape
@@ -115,9 +116,7 @@ class CoDETR(nn.Module):
         img_masks = torch.ones((1, img_h, img_w), device=mlvl_feats[0].device)
         img_masks[0, :unpad_h, :unpad_w] = 0
 
-        outs = self.query_head(mlvl_feats, img_masks)
-        batch_img_metas = [data_samples.metainfo for data_samples in batch_data_samples]
-        predictions = self.query_head.predict_by_feat(*outs, batch_img_metas=batch_img_metas, rescale=rescale)
+        predictions = self.query_head(mlvl_feats, img_masks)
         return predictions
 
 

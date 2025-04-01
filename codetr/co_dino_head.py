@@ -60,6 +60,11 @@ class CoDINOHead(DINOHead):
         assert positional_encoding.pop("type") == "SinePositionalEncoding"
         self.positional_encoding = SinePositionalEncoding(**positional_encoding)
 
+        self.max_per_img = self.test_cfg.get("max_per_img", self.num_query)
+        self.score_thr = self.test_cfg.get("score_thr", 0)
+        self.nms = self.test_cfg.get("nms", None)
+        self.with_nms = self.nms is not None
+
     def _init_layers(self):
         assert self.transformer.pop("type") == "CoDinoTransformer"
         self.transformer = CoDinoTransformer(**self.transformer)
@@ -102,8 +107,8 @@ class CoDINOHead(DINOHead):
         self,
         mlvl_feats: List[Tensor],
         img_masks: Tensor,
-        # rescale: bool= True
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List[Tensor]]:
+    ) -> List[Tuple[Tensor, Tensor, Tensor]]:
+        image_height, image_width = img_masks.shape[-2:]
         mlvl_masks = []
         mlvl_positional_encodings = []
 
@@ -120,36 +125,33 @@ class CoDINOHead(DINOHead):
             mlvl_feats,
             mlvl_masks,
             mlvl_positional_encodings,
-            reg_branches=self.reg_branches if self.with_box_refine else None,  # noqa:E501
-            cls_branches=self.cls_branches if self.as_two_stage else None,  # noqa:E501
+            reg_branches=self.reg_branches if self.with_box_refine else None,
+            cls_branches=self.cls_branches if self.as_two_stage else None,
         )
 
         lvl = len(self.transformer.decoder.layers) - 1
-        outputs_classes = self.cls_branches[lvl](final_decoder_state)
+        outputs_classes = self.cls_branches[lvl](final_decoder_state)  # (bs,900,80)
         tmp = self.reg_branches[lvl](final_decoder_state)
         if final_decoder_references_unact.shape[-1] == 4:
             tmp += final_decoder_references_unact
         else:
             assert final_decoder_references_unact.shape[-1] == 2
             tmp[..., :2] += final_decoder_references_unact
-        outputs_coords = tmp.sigmoid()
+        outputs_coords = tmp.sigmoid()  # (bs,900,4)
 
-        return outputs_classes, outputs_coords
-
-    def predict_by_feat(self, cls_scores, bbox_preds, batch_img_metas, rescale=True):
+        batch_size = outputs_coords.shape[0]
 
         result_list = []
-        for img_id in range(len(batch_img_metas)):
-            cls_score = cls_scores[img_id]
-            bbox_pred = bbox_preds[img_id]
-            img_meta = batch_img_metas[img_id]
-            results = self._predict_by_feat_single(cls_score, bbox_pred, img_meta, rescale)
+        for img_id in range(batch_size):
+            cls_score = outputs_classes[img_id]
+            bbox_pred = outputs_coords[img_id]
+            results = self._predict_by_feat_single(cls_score, bbox_pred, image_height, image_width)
             result_list.append(results)
         return result_list
 
     def _predict_by_feat_single(
-        self, cls_score: Tensor, bbox_pred: Tensor, img_meta: dict, rescale: bool = True
-    ) -> InstanceData:
+        self, cls_score: Tensor, bbox_pred: Tensor, image_height: int, image_width: int
+    ) -> Tuple[Tensor, Tensor, Tensor]:
         """Transform outputs from the last decoder layer into bbox predictions
         for each image.
 
@@ -176,48 +178,60 @@ class CoDINOHead(DINOHead):
                   the last dimension 4 arrange as (x1, y1, x2, y2).
         """
         assert len(cls_score) == len(bbox_pred)  # num_queries
-        max_per_img = self.test_cfg.get("max_per_img", self.num_query)
-        score_thr = self.test_cfg.get("score_thr", 0)
-        with_nms = self.test_cfg.get("nms", None)
 
-        img_shape = img_meta["img_shape"]
         # exclude background
         if self.loss_cls.use_sigmoid:
-            cls_score = cls_score.sigmoid()
-            scores, indexes = cls_score.view(-1).topk(max_per_img)
-            det_labels = indexes % self.num_classes
+            cls_score = cls_score.sigmoid()  # (num_queries, num_classes)
+            scores, indexes = cls_score.view(-1).topk(self.max_per_img)  # (300,)
+            det_labels = indexes % self.num_classes  # (300,)
             bbox_index = indexes // self.num_classes
+            # (num_queries,4) -> (300,4)
             bbox_pred = bbox_pred[bbox_index]
         else:
             scores, det_labels = F.softmax(cls_score, dim=-1)[..., :-1].max(-1)
-            scores, bbox_index = scores.topk(max_per_img)
+            scores, bbox_index = scores.topk(self.max_per_img)
             bbox_pred = bbox_pred[bbox_index]
             det_labels = det_labels[bbox_index]
 
-        if score_thr > 0:
-            valid_mask = scores > score_thr
+        if self.score_thr > 0:
+            valid_mask = scores > self.score_thr
             scores = scores[valid_mask]
             bbox_pred = bbox_pred[valid_mask]
             det_labels = det_labels[valid_mask]
 
-        det_bboxes = bbox_cxcywh_to_xyxy(bbox_pred)
-        det_bboxes[:, 0::2] = det_bboxes[:, 0::2] * img_shape[1]
-        det_bboxes[:, 1::2] = det_bboxes[:, 1::2] * img_shape[0]
-        det_bboxes[:, 0::2].clamp_(min=0, max=img_shape[1])
-        det_bboxes[:, 1::2].clamp_(min=0, max=img_shape[0])
-        if rescale:
-            assert img_meta.get("scale_factor") is not None
-            det_bboxes /= det_bboxes.new_tensor(img_meta["scale_factor"]).repeat((1, 2))
+        det_bboxes = bbox_cxcywh_to_xyxy(bbox_pred)  # (300,4)
+        det_bboxes[:, 0::2] = det_bboxes[:, 0::2] * image_width
+        det_bboxes[:, 1::2] = det_bboxes[:, 1::2] * image_height
+        det_bboxes[:, 0::2].clamp_(min=0, max=image_width)
+        det_bboxes[:, 1::2].clamp_(min=0, max=image_height)
 
-        results = InstanceData()
-        results.bboxes = det_bboxes
-        results.scores = scores
-        results.labels = det_labels
+        if self.with_nms:
+            det_bboxes, keep_idxs = batched_nms(det_bboxes, scores, det_labels, self.nms)
 
-        if with_nms and results.bboxes.numel() > 0:
-            det_bboxes, keep_idxs = batched_nms(results.bboxes, results.scores, results.labels, self.test_cfg.nms)
-            results = results[keep_idxs]
-            results.scores = det_bboxes[:, -1]
-            results = results[:max_per_img]
+            scores = det_bboxes[:, -1]
+            det_bboxes = det_bboxes[:, :-1]
+            det_labels = det_labels[keep_idxs]
 
-        return results
+        return det_bboxes, det_labels, scores
+
+        # det_bboxes = bbox_cxcywh_to_xyxy(bbox_pred) # (300,4)
+        # det_bboxes[:, 0::2] = det_bboxes[:, 0::2] * img_shape[1]
+        # det_bboxes[:, 1::2] = det_bboxes[:, 1::2] * img_shape[0]
+        # det_bboxes[:, 0::2].clamp_(min=0, max=img_shape[1])
+        # det_bboxes[:, 1::2].clamp_(min=0, max=img_shape[0])
+        # if rescale:
+        #     assert img_meta.get("scale_factor") is not None
+        #     det_bboxes /= det_bboxes.new_tensor(img_meta["scale_factor"]).repeat((1, 2))
+
+        # results = InstanceData()
+        # results.bboxes = det_bboxes
+        # results.scores = scores
+        # results.labels = det_labels
+
+        # if with_nms and results.bboxes.numel() > 0:
+        #     det_bboxes, keep_idxs = batched_nms(results.bboxes, results.scores, results.labels, self.test_cfg.nms)
+        #     results = results[keep_idxs]
+        #     results.scores = det_bboxes[:, -1]
+        #     results = results[:max_per_img]
+
+        # return results
