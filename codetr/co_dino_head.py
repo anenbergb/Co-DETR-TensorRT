@@ -60,7 +60,6 @@ class CoDINOHead(DINOHead):
 
         self.activate = MODELS.build(self.act_cfg)
         self.positional_encoding = MODELS.build(self.positional_encoding)
-        self.init_denoising(dn_cfg)
 
     def _init_layers(self):
         assert self.transformer.pop("type") == "CoDinoTransformer"
@@ -96,13 +95,6 @@ class CoDINOHead(DINOHead):
             nn.Conv2d(self.embed_dims, self.embed_dims, kernel_size=3, stride=2, padding=1),
             nn.GroupNorm(32, self.embed_dims),
         )
-
-    def init_denoising(self, dn_cfg):
-        if dn_cfg is not None:
-            dn_cfg["num_classes"] = self.num_classes
-            dn_cfg["num_matching_queries"] = self.num_query
-            dn_cfg["embed_dims"] = self.embed_dims
-        self.dn_generator = CdnQueryGenerator(**dn_cfg)
 
     # specializing this to only work for batch_size = 1
     # batch input shape and img_shape are the same

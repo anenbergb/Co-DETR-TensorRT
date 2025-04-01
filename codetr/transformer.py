@@ -303,25 +303,14 @@ def make_encoder_output_proposals(reference_points, level_counts):
     """Generate proposals from encoded memory.
 
     Args:
-        memory (Tensor) : The output of encoder,
-            has shape (bs, num_key, embed_dim).  num_key is
-            equal the number of points on feature map from
-            all level.
-        memory_padding_mask (Tensor): Padding mask for memory.
-            has shape (bs, num_key).
-            0 within image
-            1 in padded_region
-
+        reference_points (Tensor): The reference points \
+            used in encoder, has shape (bs, num_keys, 2).
+        level_counts (Tensor): The number of points on \
+            feature map from all level, has shape (num_levels,).
     Returns:
-        tuple: A tuple of feature map and bbox prediction.
-
-            - output_memory (Tensor): The input of decoder,  \
-                has shape (bs, num_key, embed_dim).  num_key is \
-                equal the number of points on feature map from \
-                all levels.
-            - output_proposals (Tensor): The normalized proposal \
-                after a inverse sigmoid, has shape \
-                (bs, num_keys, 4).
+        - output_proposals (Tensor): The normalized proposal \
+            after a inverse sigmoid, has shape \
+            (bs, num_keys, 4).
     """
 
     # Create values tensor [0, 1, 2, 3, 4]
@@ -336,7 +325,47 @@ def make_encoder_output_proposals(reference_points, level_counts):
     return output_proposals
 
 
+def make_encoder_output_proposals_export(reference_points, mlvl_masks):
+    lvl_repeated = get_lvl_repeated(mlvl_masks, dtype=reference_points.dtype)  # (num_keys,)
+    width = 0.05 * (2.0**lvl_repeated)  # (num_keys,)
+    width = width.view(1, -1, 1)  # (1,num_keys,1)
+    # reference points (bs,num_keys,2)
+    output_proposals = torch.cat([reference_points, width, width], dim=-1)  # (bs,num_keys,4)
+    output_proposals = torch.log(output_proposals / (1 - output_proposals))
+    return output_proposals
+
+
+def get_lvl_repeated(mlvl_masks, dtype=torch.float32):
+    lvl_repeated = []
+    for lvl, mask in enumerate(mlvl_masks):
+        H, W = mask.shape[-2:]
+        lvl_repeated.append(lvl * torch.ones(H * W, dtype=dtype, device=mask.device))
+    lvl_repeated = torch.cat(lvl_repeated, 0)
+    return lvl_repeated
+
+
 def apply_mask_to_proposal_and_memory(output_proposals, memory, memory_padding_mask):
+    """
+    Args:
+        output_proposals (Tensor): the normalized proposals,
+            shape (bs, num_key, 4).  num_key is equal the
+            number of points on feature map from all level.
+
+        memory (Tensor) : The output of encoder,
+            has shape (bs, num_key, embed_dim).  num_key is
+            equal the number of points on feature map from
+            all level.
+        memory_padding_mask (Tensor): Padding mask for memory.
+            has shape (bs, num_key).
+            0 within image
+            1 in padded_region
+    
+    Returns:
+        - output_proposals (Tensor): The normalized proposal \
+            after masking, has shape (bs, num_keys, 4).
+        - output_memory (Tensor): The output of encoder \
+            after masking, has shape (bs, num_keys, embed_dim).
+    """
     # log(0.1 / (1 - 0.1)) = -4.6
     # log(0.99 / (1 - 0.99)) = 4.6
     output_proposals_valid = ((output_proposals > -4.6) & (output_proposals < 4.6)).all(-1, keepdim=True)
@@ -346,6 +375,17 @@ def apply_mask_to_proposal_and_memory(output_proposals, memory, memory_padding_m
     output_memory = memory.masked_fill(memory_padding_mask.unsqueeze(-1), float(0))
     output_memory = output_memory.masked_fill(~output_proposals_valid, float(0))
     return output_proposals, output_memory
+
+
+def get_valid_ratio(mask, dtype=torch.float32):
+    """Get the valid ratios of feature maps of all level."""
+    _, H, W = mask.shape
+    valid_H = torch.sum(~mask[:, :, 0], 1).to(dtype)
+    valid_W = torch.sum(~mask[:, 0, :], 1).to(dtype)
+    valid_ratio_h = valid_H / H
+    valid_ratio_w = valid_W / W
+    valid_ratio = torch.stack([valid_ratio_w, valid_ratio_h], -1)
+    return valid_ratio
 
 
 class CoDinoTransformer(BaseModule):
@@ -413,16 +453,6 @@ class CoDinoTransformer(BaseModule):
         normal_(self.level_embeds)
         nn.init.normal_(self.query_embed.weight.data)
 
-    def get_valid_ratio(self, mask):
-        """Get the valid ratios of feature maps of all level."""
-        _, H, W = mask.shape
-        valid_H = torch.sum(~mask[:, :, 0], 1)
-        valid_W = torch.sum(~mask[:, 0, :], 1)
-        valid_ratio_h = valid_H.float() / H
-        valid_ratio_w = valid_W.float() / W
-        valid_ratio = torch.stack([valid_ratio_w, valid_ratio_h], -1)
-        return valid_ratio
-
     def forward(
         self,
         mlvl_feats,
@@ -438,13 +468,14 @@ class CoDinoTransformer(BaseModule):
         mask_flatten = []
         lvl_pos_embed_flatten = []
         spatial_shapes = []
+        # feat: (B,C,H,W), mask: (B,H,W), pos_embed: (B,C,H,W)
         for lvl, (feat, mask, pos_embed) in enumerate(zip(mlvl_feats, mlvl_masks, mlvl_pos_embeds)):
             bs, c, h, w = feat.shape
             spatial_shape = (h, w)
             spatial_shapes.append(spatial_shape)
-            feat = feat.flatten(2).transpose(1, 2)
-            mask = mask.flatten(1)
-            pos_embed = pos_embed.flatten(2).transpose(1, 2)
+            feat = feat.flatten(2).transpose(1, 2)  # (B,C,H,W) -> (B,H*W,C)
+            mask = mask.flatten(1)  # (B,H,W) -> (B,H*W)
+            pos_embed = pos_embed.flatten(2).transpose(1, 2)  # (B,C,H,W) -> (B,H*W,C)
             lvl_pos_embed = pos_embed + self.level_embeds[lvl].view(1, 1, -1)
             lvl_pos_embed_flatten.append(lvl_pos_embed)
             feat_flatten.append(feat)
@@ -455,9 +486,9 @@ class CoDinoTransformer(BaseModule):
         spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=feat_flatten.device)
         level_counts = spatial_shapes.prod(1)
         level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), level_counts.cumsum(0)[:-1]))
-        valid_ratios = torch.stack([self.get_valid_ratio(m) for m in mlvl_masks], 1)
+        valid_ratios = torch.stack([get_valid_ratio(m, dtype=feat_flatten.dtype) for m in mlvl_masks], 1)
 
-        reference_points = get_reference_points(mlvl_feats, valid_ratios, device=feat.device)  # (1,12276,5,2)
+        reference_points = get_reference_points(mlvl_feats, valid_ratios, device=feat_flatten.device)  # (1,12276,5,2)
         # (bs,num_keys,2) * (bs,num_levels,2)
         # (bs,num_keys,1,2) * (bs,1,num_levels,2) -> (bs,num_keys,num_levels,2)
         reference_points_by_level = reference_points[:, :, None] * valid_ratios[:, None]
@@ -479,17 +510,18 @@ class CoDinoTransformer(BaseModule):
         memory = memory.permute(1, 0, 2)
         bs, _, c = memory.shape
 
-        output_proposals = make_encoder_output_proposals(reference_points, level_counts)
+        output_proposals = make_encoder_output_proposals_export(reference_points, mlvl_masks)  # (bs,spatial_len,4)
         output_proposals, output_memory = apply_mask_to_proposal_and_memory(output_proposals, memory, mask_flatten)
         output_memory = self.enc_output_norm(self.enc_output(output_memory))
 
         # decoder num_layers = 6, but # cls_branches = 7, so cls_branches[6] is the final classification branch
+        # (bs,spatial_len,80) for 80 classes
         enc_outputs_class = cls_branches[self.decoder.num_layers](output_memory)
+        # (bs,spatial_len,4)
         enc_outputs_coord_unact = reg_branches[self.decoder.num_layers](output_memory) + output_proposals
-
         topk = self.two_stage_num_proposals
-        # NOTE In DeformDETR, enc_outputs_class[..., 0] is used for topk
-        topk_indices = torch.topk(enc_outputs_class.max(-1)[0], topk, dim=1)[1]
+        # # NOTE In DeformDETR, enc_outputs_class[..., 0] is used for topk
+        topk_indices = torch.topk(enc_outputs_class.max(-1)[0], topk, dim=1)[1]  # (bs, topk)
         topk_coords_unact = torch.gather(enc_outputs_coord_unact, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 4))
         query = self.query_embed.weight[:, None, :].repeat(1, bs, 1).transpose(0, 1)
 
