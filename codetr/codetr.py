@@ -1,5 +1,5 @@
 import copy
-from typing import Tuple, Union, Optional
+from typing import Tuple, Union, Optional, List
 import warnings
 
 import torch
@@ -68,7 +68,7 @@ class CoDETR(nn.Module):
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
 
-    def forward(self, batch_inputs: Tensor, batch_data_samples: SampleList, rescale: bool = True) -> SampleList:
+    def forward(self, batch_inputs: Tensor, img_masks: Tensor) -> List[Tuple[Tensor, Tensor, Tensor]]:
         """Predict results from a batch of inputs and data samples with post-
         processing.
 
@@ -94,30 +94,11 @@ class CoDETR(nn.Module):
         """
         assert self.eval_module == "detr"
 
-        if self.use_lsj:
-            for data_samples in batch_data_samples:
-                img_metas = data_samples.metainfo
-                input_img_h, input_img_w = img_metas["batch_input_shape"]
-                img_metas["img_shape"] = [input_img_h, input_img_w]
-
         # (bs,dim,H,W) -> List[ (bs,dim,H,W), ...]
-        image_height, image_width = batch_inputs.shape[2:]
         image_feats = self.backbone(batch_inputs)
         image_feats = self.neck(image_feats)
-        results_list = self.predict_query_head(image_feats, batch_data_samples, image_height, image_width)
+        results_list = self.query_head(image_feats, img_masks)
         return results_list
-
-    def predict_query_head(
-        self, mlvl_feats: Tuple[Tensor], batch_data_samples: SampleList, image_height: int, image_width: int
-    ) -> InstanceList:
-        img_h, img_w = batch_data_samples[0].img_shape
-        unpad_h, unpad_w = batch_data_samples[0].img_unpadded_shape
-        # 0 within image, 1 in padded region
-        img_masks = torch.ones((1, img_h, img_w), device=mlvl_feats[0].device)
-        img_masks[0, :unpad_h, :unpad_w] = 0
-
-        predictions = self.query_head(mlvl_feats, img_masks)
-        return predictions
 
 
 def get_dataset_meta(checkpoint):

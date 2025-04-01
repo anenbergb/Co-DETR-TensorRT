@@ -14,14 +14,16 @@ from mmengine.dataset import pseudo_collate
 from mmengine.visualization import Visualizer
 from mmengine.registry import VISUALIZERS
 from mmengine.dataset import Compose
+from mmengine.structures import InstanceData
 
 from mmdet.models.utils.misc import samplelist_boxtype2tensor
 from mmdet.models.data_preprocessors import DetDataPreprocessor
-from mmdet.structures import DetDataSample
+from mmdet.structures import DetDataSample, SampleList
 from mmdet.structures.mask import encode_mask_results, mask2bbox
+from mmdet.utils import InstanceList
 
-
-PredType = List[DetDataSample]
+# SampleList is a list of DetDataSample
+# InstanceList is a list of InstanceData
 
 
 class Inferencer:
@@ -116,7 +118,7 @@ class Inferencer:
     def visualize(
         self,
         inputs: List[np.ndarray],
-        preds: PredType,
+        preds: SampleList,
         return_vis: bool = False,
         show: bool = False,
         wait_time: int = 0,
@@ -193,7 +195,7 @@ class Inferencer:
 
     def postprocess(
         self,
-        preds: PredType,
+        preds: SampleList,
         visualization: Optional[List[np.ndarray]] = None,
         return_datasamples: bool = False,
         print_result: bool = False,
@@ -312,6 +314,34 @@ class Inferencer:
 
         return result
 
+    def run_inference(self, batch_inputs: torch.Tensor, batch_data_samples: SampleList) -> InstanceList:
+        """
+        Args:
+            batch_inputs (Tensor): Inputs, has shape (bs, dim, H, W).
+            batch_data_samples (List[:obj:`DetDataSample`]): The batch
+
+        """
+        bs, _, H, W = batch_inputs.shape
+        # 0 within image, 1 in padded region
+        img_masks = torch.ones((bs, H, W), device=batch_inputs.device, dtype=batch_inputs.dtype)
+        for i, data_samples in enumerate(batch_data_samples):
+            unpad_h, unpad_w = data_samples.metainfo.get("img_unpadded_shape", (H, W))
+            img_masks[i, :unpad_h, :unpad_w] = 0
+        predictions = self.model(batch_inputs, img_masks)
+        results_list = []
+        for i, (boxes, scores, labels) in enumerate(predictions):
+
+            # rescale to the original image size
+            scale_factor = batch_data_samples[i].metainfo["scale_factor"]
+            boxes /= boxes.new_tensor(scale_factor).repeat((1, 2))
+
+            results = InstanceData()
+            results.bboxes = boxes
+            results.scores = scores
+            results.labels = labels
+            results_list.append(results)
+        return results_list
+
     def __call__(
         self,
         images: List[np.ndarray],
@@ -340,8 +370,9 @@ class Inferencer:
                 data_processed = self.data_preprocessor(data, False)
                 batch_inputs = data_processed["inputs"].to(device)
                 batch_data_samples = data_processed["data_samples"]
-                results_list = self.model(batch_inputs, batch_data_samples)
+                results_list = self.run_inference(batch_inputs, batch_data_samples)
 
+            # InstanceList -> SampleList
             preds = self.add_pred_to_datasample(batch_data_samples, results_list)
 
             visualization = self.visualize(

@@ -64,6 +64,7 @@ class CoDINOHead(DINOHead):
         self.score_thr = self.test_cfg.get("score_thr", 0)
         self.nms = self.test_cfg.get("nms", None)
         self.with_nms = self.nms is not None
+        self.use_sigmoid = self.loss_cls.use_sigmoid
 
     def _init_layers(self):
         assert self.transformer.pop("type") == "CoDinoTransformer"
@@ -180,7 +181,7 @@ class CoDINOHead(DINOHead):
         assert len(cls_score) == len(bbox_pred)  # num_queries
 
         # exclude background
-        if self.loss_cls.use_sigmoid:
+        if self.use_sigmoid:
             cls_score = cls_score.sigmoid()  # (num_queries, num_classes)
             scores, indexes = cls_score.view(-1).topk(self.max_per_img)  # (300,)
             det_labels = indexes % self.num_classes  # (300,)
@@ -206,13 +207,15 @@ class CoDINOHead(DINOHead):
         det_bboxes[:, 1::2].clamp_(min=0, max=image_height)
 
         if self.with_nms:
+            # import pytest
+            # pytest.set_trace()
             det_bboxes, keep_idxs = batched_nms(det_bboxes, scores, det_labels, self.nms)
 
             scores = det_bboxes[:, -1]
             det_bboxes = det_bboxes[:, :-1]
             det_labels = det_labels[keep_idxs]
 
-        return det_bboxes, det_labels, scores
+        return det_bboxes, scores, det_labels
 
         # det_bboxes = bbox_cxcywh_to_xyxy(bbox_pred) # (300,4)
         # det_bboxes[:, 0::2] = det_bboxes[:, 0::2] * img_shape[1]
