@@ -150,15 +150,19 @@ class CoDINOHead(DINOHead):
             # Reshape and expand bbox_index for gathering
             expanded_indices = bbox_index.unsqueeze(-1).expand(-1, -1, 4)
             # Gather along dimension 1, the # boxes dimension
-            # (num_queries,4) -> (300,4)
+            # (bs,num_queries,4) -> (bs,300,4)
             bbox_pred = torch.gather(outputs_coords, 1, expanded_indices)
 
         else:
-            print("not implemented yet")
-            # scores, det_labels = F.softmax(cls_score, dim=-1)[..., :-1].max(-1)
-            # scores, bbox_index = scores.topk(self.max_per_img)
-            # bbox_pred = bbox_pred[bbox_index]
-            # det_labels = det_labels[bbox_index]
+            scores, det_labels = F.softmax(outputs_classes, dim=-1)[..., :-1].max(-1)
+            scores, bbox_index = torch.topk(scores, self.max_per_img, dim=-1)
+
+            det_labels = torch.gather(det_labels, 1, bbox_index)  #  (bs,num_queries) -> (bs,300)
+            # Reshape and expand bbox_index for gathering
+            expanded_indices = bbox_index.unsqueeze(-1).expand(-1, -1, 4)
+            # Gather along dimension 1, the # boxes dimension
+            # (bs,num_queries,4) -> (bs,300,4)
+            bbox_pred = torch.gather(outputs_coords, 1, expanded_indices)
 
         det_bboxes = bbox_cxcywh_to_xyxy(bbox_pred)  # (300,4)
         det_bboxes[..., 0::2] = det_bboxes[..., 0::2] * image_width
