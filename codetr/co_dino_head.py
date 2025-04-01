@@ -20,6 +20,7 @@ from mmdet.structures.bbox import bbox_cxcywh_to_xyxy, bbox_overlaps, bbox_xyxy_
 from mmdet.utils import InstanceList, reduce_mean
 
 from codetr.transformer import CoDinoTransformer
+from codetr.positional_encoding import SinePositionalEncoding
 
 
 class CoDINOHead(DINOHead):
@@ -31,7 +32,7 @@ class CoDINOHead(DINOHead):
         transformer=None,
         in_channels=2048,
         max_pos_coords=300,
-        dn_cfg=None,
+        dn_cfg=None,  # ignore this input
         use_zero_padding=False,
         positional_encoding=dict(type="SinePositionalEncoding", num_feats=128, normalize=True),
         **kwargs,
@@ -54,12 +55,10 @@ class CoDINOHead(DINOHead):
         if self.mixed_selection:
             transformer["mixed_selection"] = self.mixed_selection
         self.transformer = transformer
-        self.act_cfg = transformer.get("act_cfg", dict(type="ReLU", inplace=True))
 
         super().__init__(*args, **kwargs)
-
-        self.activate = MODELS.build(self.act_cfg)
-        self.positional_encoding = MODELS.build(self.positional_encoding)
+        assert positional_encoding.pop("type") == "SinePositionalEncoding"
+        self.positional_encoding = SinePositionalEncoding(**positional_encoding)
 
     def _init_layers(self):
         assert self.transformer.pop("type") == "CoDinoTransformer"
@@ -67,9 +66,10 @@ class CoDINOHead(DINOHead):
         self.embed_dims = self.transformer.embed_dims
         assert hasattr(self.positional_encoding, "num_feats")
         num_feats = self.positional_encoding.num_feats
-        assert num_feats * 2 == self.embed_dims, (
-            "embed_dims should" f" be exactly 2 times of num_feats. Found {self.embed_dims}" f" and {num_feats}."
-        )
+        assert (
+            num_feats * 2 == self.embed_dims
+        ), "embed_dims should be exactly 2 times of num_feats. Found {self.embed_dims} and {num_feats}."
+
         """Initialize classification branch and regression branch of head."""
         fc_cls = Linear(self.embed_dims, self.cls_out_channels)
         reg_branch = []
@@ -106,12 +106,17 @@ class CoDINOHead(DINOHead):
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, List[Tensor]]:
         mlvl_masks = []
         mlvl_positional_encodings = []
+
+        img_masks = img_masks.unsqueeze(1)  # (bs,H,W) -> (bs,1,H,W)
         for feat in mlvl_feats:
-            mlvl_masks.append(F.interpolate(img_masks[None], size=feat.shape[-2:]).to(torch.bool).squeeze(0))
-            mlvl_positional_encodings.append(self.positional_encoding(mlvl_masks[-1]))
+            # (bs,1,h,w) -> (bs,h,w)
+            img_mask_interp = F.interpolate(img_masks, size=feat.shape[-2:]).to(torch.bool).squeeze(0)
+            pos_encoding = self.positional_encoding(img_mask_interp, dtype=feat.dtype)
+            mlvl_masks.append(img_mask_interp)
+            mlvl_positional_encodings.append(pos_encoding)
 
         # (1,900,256), (1,900,256)
-        final_decoder_state, final_decoder_references = self.transformer(
+        final_decoder_state, final_decoder_references_unact = self.transformer(
             mlvl_feats,
             mlvl_masks,
             mlvl_positional_encodings,
@@ -120,14 +125,13 @@ class CoDINOHead(DINOHead):
         )
 
         lvl = len(self.transformer.decoder.layers) - 1
-        reference = inverse_sigmoid(final_decoder_references, eps=1e-3)
         outputs_classes = self.cls_branches[lvl](final_decoder_state)
         tmp = self.reg_branches[lvl](final_decoder_state)
-        if reference.shape[-1] == 4:
-            tmp += reference
+        if final_decoder_references_unact.shape[-1] == 4:
+            tmp += final_decoder_references_unact
         else:
-            assert reference.shape[-1] == 2
-            tmp[..., :2] += reference
+            assert final_decoder_references_unact.shape[-1] == 2
+            tmp[..., :2] += final_decoder_references_unact
         outputs_coords = tmp.sigmoid()
 
         return outputs_classes, outputs_coords

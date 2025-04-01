@@ -236,94 +236,6 @@ def test_neck(dtype):
     benchmark_runtime(run_pytorch_model, run_exported_model, run_tensorrt_model, iterations=iterations)
 
 
-@pytest.mark.parametrize("dtype", [torch.float32])
-def test_query_head(dtype):
-    print(f"Testing CoDINOHead with dtype={dtype}")
-
-    torch.manual_seed(42)  # For reproducibility
-
-    iterations = 3
-    device = "cuda:0"
-    optimization_level = 3  # default is 3, max is 5
-
-    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    model_file = os.path.join(PROJECT_ROOT, "configs/co_dino_5scale_swin_l_16xb1_16e_o365tococo.py")
-    codetr = build_CoDETR(model_file, device=device)
-    model = EncoderWrapper(codetr.query_head.transformer.encoder).to(device).to(dtype)
-    model.eval()
-
-    cfg = Config(query_head_config)
-    model = CoDINOHead(**cfg).to(device).to(dtype)
-    model.init_weights()
-    model.to(dtype)
-    model.eval()
-
-    # input_height = 1280
-    # input_width = 1920
-    input_height = 384
-    input_width = 384
-    in_channels = 256
-    batch_size = 1
-    img_feats = []
-    downscales = [4, 8, 16, 32, 64]
-    for downscale in downscales:
-        img_feats.append(
-            torch.randn(
-                batch_size, in_channels, input_height // downscale, input_width // downscale, dtype=dtype, device=device
-            )
-        )
-    # 0 within image, 1 in padded region
-    # this is a dummy mask where all pixels are within the image
-    img_masks = torch.zeros((1, input_height, input_width), device=device, dtype=dtype)
-
-    with torch.inference_mode():
-
-        def run_pytorch_model():
-            return model(img_feats, img_masks)
-
-        # run_pytorch_model()
-
-        model_export = torch.export.export(
-            model,
-            args=(img_feats, img_masks),
-            strict=True,
-        )
-        print(f"✅ Exported {type(model)} to {type(model_export)} with dtype={dtype}")
-
-        def run_exported_model():
-            return model_export.module()(img_feats, img_masks)
-
-        model_trt = torch_tensorrt.dynamo.compile(
-            model_export,
-            inputs=(img_feats, img_masks),
-            enabled_precisions=(dtype,),
-            optimization_level=optimization_level,
-        )
-        print(f"✅ Compiled {type(model_export)} to TensorRT with dtype={dtype}")
-
-        def run_tensorrt_model():
-            return model_trt(img_feats, img_masks)
-
-        # Verify outputs match
-        output_pytorch = run_pytorch_model()
-        output_export = run_exported_model()
-        output_trt = run_tensorrt_model()
-
-    tol_export = 1e-3 if dtype == torch.float32 else 1e-3
-    tol_trt = 1e-1 if dtype == torch.float32 else 1
-
-    for i in range(len(output_pytorch)):
-        abs_diff = torch.abs(output_pytorch[i] - output_trt[i])
-        top_5_diff, top_5_locations = torch.topk(abs_diff.flatten(), 5)
-        print(
-            f"Top 5 absolute differences for output {i}: {top_5_diff.tolist()} at locations {top_5_locations.tolist()}"
-        )
-        torch.testing.assert_close(output_pytorch[i], output_export[i], rtol=tol_export, atol=tol_export)
-        torch.testing.assert_close(output_pytorch[i], output_trt[i], rtol=tol_trt, atol=tol_trt)
-
-    benchmark_runtime(run_pytorch_model, run_exported_model, run_tensorrt_model, iterations=iterations)
-
-
 class EncoderWrapper(torch.nn.Module):
     def __init__(self, encoder):
         super().__init__()
@@ -737,8 +649,6 @@ def test_transformer(dtype):
                 mlvl_feats,
             )
 
-        run_pytorch_model()
-
         model_export = torch.export.export(
             model,
             args=(mlvl_feats, mlvl_masks, mlvl_feats),
@@ -788,6 +698,74 @@ The selection of topk indices will likely be more similar if the CoDETR model is
     #     )
     #     torch.testing.assert_close(output_pytorch[i], output_export[i], rtol=tol_export, atol=tol_export)
     #     torch.testing.assert_close(output_pytorch[i], output_trt[i], rtol=tol_trt, atol=tol_trt)
+
+    benchmark_runtime(run_pytorch_model, run_exported_model, run_tensorrt_model, iterations=iterations)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [torch.float32, torch.float16],
+)
+def test_query_head(dtype):
+    print(f"Testing CoDINOHead with dtype={dtype}")
+
+    torch.manual_seed(42)  # For reproducibility
+
+    iterations = 3
+    device = "cuda:0"
+    optimization_level = 3  # default is 3, max is 5
+
+    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    model_file = os.path.join(PROJECT_ROOT, "configs/co_dino_5scale_swin_l_16xb1_16e_o365tococo.py")
+    codetr = build_CoDETR(model_file, device=device)
+    model = codetr.query_head.to(device).to(dtype)
+    model.eval()
+
+    # input_height = 1280
+    # input_width = 1920
+    input_height = 384
+    input_width = 384
+    in_channels = 256
+    batch_size = 1
+    img_feats = []
+    downscales = [4, 8, 16, 32, 64]
+    for downscale in downscales:
+        img_feats.append(
+            torch.randn(
+                batch_size, in_channels, input_height // downscale, input_width // downscale, dtype=dtype, device=device
+            )
+        )
+    # 0 within image, 1 in padded region
+    # this is a dummy mask where all pixels are within the image
+    img_masks = torch.zeros((1, input_height, input_width), device=device, dtype=dtype)
+
+    with torch.inference_mode():
+
+        def run_pytorch_model():
+            return model(img_feats, img_masks)
+
+        run_pytorch_model()
+
+        model_export = torch.export.export(
+            model,
+            args=(img_feats, img_masks),
+            strict=True,
+        )
+        print(f"✅ Exported {type(model)} to {type(model_export)} with dtype={dtype}")
+
+        def run_exported_model():
+            return model_export.module()(img_feats, img_masks)
+
+        model_trt = torch_tensorrt.dynamo.compile(
+            model_export,
+            inputs=(img_feats, img_masks),
+            enabled_precisions=(dtype,),
+            optimization_level=optimization_level,
+        )
+        print(f"✅ Compiled {type(model_export)} to TensorRT with dtype={dtype}")
+
+        def run_tensorrt_model():
+            return model_trt(img_feats, img_masks)
 
     benchmark_runtime(run_pytorch_model, run_exported_model, run_tensorrt_model, iterations=iterations)
 

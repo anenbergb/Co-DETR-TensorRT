@@ -530,7 +530,7 @@ class CoDinoTransformer(BaseModule):
         memory = memory.permute(1, 0, 2)
 
         # (1,900,256), (1,900,256)
-        final_state, final_references = self.decoder(
+        final_state, final_references_unact = self.decoder(
             query=query,
             key=None,
             value=memory,
@@ -543,4 +543,4 @@ class CoDinoTransformer(BaseModule):
             reg_branches=reg_branches,
             **kwargs,
         )
-        return final_state, final_references.sigmoid()
+        return final_state, final_references_unact
