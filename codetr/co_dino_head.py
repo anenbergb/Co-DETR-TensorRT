@@ -106,7 +106,7 @@ class CoDINOHead(DINOHead):
         self,
         mlvl_feats: List[Tensor],
         img_masks: Tensor,
-    ) -> List[Tuple[Tensor, Tensor, Tensor]]:
+    ) -> Tuple[Tensor, Tensor, Tensor]:
         image_height, image_width = img_masks.shape[-2:]
         mlvl_masks = []
         mlvl_positional_encodings = []
@@ -114,7 +114,7 @@ class CoDINOHead(DINOHead):
         img_masks = img_masks.unsqueeze(1)  # (bs,H,W) -> (bs,1,H,W)
         for feat in mlvl_feats:
             # (bs,1,h,w) -> (bs,h,w)
-            img_mask_interp = F.interpolate(img_masks, size=feat.shape[-2:]).to(torch.bool).squeeze(0)
+            img_mask_interp = F.interpolate(img_masks, size=feat.shape[-2:]).to(torch.bool).squeeze(1)
             pos_encoding = self.positional_encoding(img_mask_interp, dtype=feat.dtype)
             mlvl_masks.append(img_mask_interp)
             mlvl_positional_encodings.append(pos_encoding)
@@ -140,67 +140,29 @@ class CoDINOHead(DINOHead):
 
         batch_size = outputs_coords.shape[0]
 
-        result_list = []
-        for img_id in range(batch_size):
-            cls_score = outputs_classes[img_id]
-            bbox_pred = outputs_coords[img_id]
-            results = self._predict_by_feat_single(cls_score, bbox_pred, image_height, image_width)
-            result_list.append(results)
-        return result_list
-
-    def _predict_by_feat_single(
-        self, cls_score: Tensor, bbox_pred: Tensor, image_height: int, image_width: int
-    ) -> Tuple[Tensor, Tensor, Tensor]:
-        """Transform outputs from the last decoder layer into bbox predictions
-        for each image.
-
-        Args:
-            cls_score (Tensor): Box score logits from the last decoder layer
-                for each image. Shape [num_queries, cls_out_channels].
-            bbox_pred (Tensor): Sigmoid outputs from the last decoder layer
-                for each image, with coordinate format (cx, cy, w, h) and
-                shape [num_queries, 4].
-            img_meta (dict): Image meta info.
-            rescale (bool): If True, return boxes in original image
-                space. Default True.
-
-        Returns:
-            :obj:`InstanceData`: Detection results of each image
-            after the post process.
-            Each item usually contains following keys.
-
-                - scores (Tensor): Classification scores, has a shape
-                  (num_instance, )
-                - labels (Tensor): Labels of bboxes, has a shape
-                  (num_instances, ).
-                - bboxes (Tensor): Has a shape (num_instances, 4),
-                  the last dimension 4 arrange as (x1, y1, x2, y2).
-        """
-        assert len(cls_score) == len(bbox_pred)  # num_queries
-
-        # exclude background
         if self.use_sigmoid:
-            cls_score = cls_score.sigmoid()  # (num_queries, num_classes)
+            cls_score = outputs_classes.sigmoid()  # (bs, num_queries, num_classes)
+            scores, indexes = torch.topk(cls_score.view(batch_size, -1), self.max_per_img, dim=-1)
 
-            scores, indexes = torch.topk(cls_score.view(1, -1), self.max_per_img, dim=-1)
-            # scores, indexes = cls_score.view(-1).topk(self.max_per_img)  # (300,)
-            scores = scores.view(-1)  # (300,)
-            indexes = indexes.view(-1)  # (300,)
+            det_labels = indexes % self.num_classes  # (bs, 300)
+            bbox_index = indexes // self.num_classes  # (bs, 300)
 
-            det_labels = indexes % self.num_classes  # (300,)
-            bbox_index = indexes // self.num_classes
+            # Reshape and expand bbox_index for gathering
+            expanded_indices = bbox_index.unsqueeze(-1).expand(-1, -1, 4)
+            # Gather along dimension 1, the # boxes dimension
             # (num_queries,4) -> (300,4)
-            bbox_pred = bbox_pred[bbox_index]
+            bbox_pred = torch.gather(outputs_coords, 1, expanded_indices)
+
         else:
-            scores, det_labels = F.softmax(cls_score, dim=-1)[..., :-1].max(-1)
-            scores, bbox_index = scores.topk(self.max_per_img)
-            bbox_pred = bbox_pred[bbox_index]
-            det_labels = det_labels[bbox_index]
+            print("not implemented yet")
+            # scores, det_labels = F.softmax(cls_score, dim=-1)[..., :-1].max(-1)
+            # scores, bbox_index = scores.topk(self.max_per_img)
+            # bbox_pred = bbox_pred[bbox_index]
+            # det_labels = det_labels[bbox_index]
 
         det_bboxes = bbox_cxcywh_to_xyxy(bbox_pred)  # (300,4)
-        det_bboxes[:, 0::2] = det_bboxes[:, 0::2] * image_width
-        det_bboxes[:, 1::2] = det_bboxes[:, 1::2] * image_height
-        det_bboxes[:, 0::2].clamp_(min=0, max=image_width)
-        det_bboxes[:, 1::2].clamp_(min=0, max=image_height)
-
+        det_bboxes[..., 0::2] = det_bboxes[..., 0::2] * image_width
+        det_bboxes[..., 1::2] = det_bboxes[..., 1::2] * image_height
+        det_bboxes[..., 0::2].clamp_(min=0, max=image_width)
+        det_bboxes[..., 1::2].clamp_(min=0, max=image_height)
         return det_bboxes, scores, det_labels

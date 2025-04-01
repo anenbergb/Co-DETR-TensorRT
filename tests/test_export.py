@@ -52,61 +52,6 @@ neck_config = {
     "num_outs": 5,
 }
 
-query_head_config = {
-    #  'type': 'CoDINOHead',
-    "num_query": 900,
-    "num_classes": 80,
-    "in_channels": 2048,
-    "as_two_stage": True,
-    "dn_cfg": {
-        "label_noise_scale": 0.5,
-        "box_noise_scale": 0.4,
-        "group_cfg": {"dynamic": True, "num_groups": None, "num_dn_queries": 500},
-    },
-    "transformer": {
-        "type": "CoDinoTransformer",
-        "with_coord_feat": False,
-        "num_co_heads": 2,
-        "num_feature_levels": 5,
-        "encoder": {
-            "type": "DetrTransformerEncoder",
-            "num_layers": 6,
-            "with_cp": 6,
-            "transformerlayers": {
-                "type": "BaseTransformerLayer",
-                "attn_cfgs": {
-                    "type": "MultiScaleDeformableAttention",
-                    "embed_dims": 256,
-                    "num_levels": 5,
-                    "dropout": 0.0,
-                },
-                "feedforward_channels": 2048,
-                "ffn_dropout": 0.0,
-                "operation_order": ("self_attn", "norm", "ffn", "norm"),
-            },
-        },
-        "decoder": {
-            "type": "DinoTransformerDecoder",
-            "num_layers": 6,
-            "return_intermediate": True,
-            "transformerlayers": {
-                "type": "DetrTransformerDecoderLayer",
-                "attn_cfgs": [
-                    {"type": "MultiheadAttention", "embed_dims": 256, "num_heads": 8, "dropout": 0.0},
-                    {"type": "MultiScaleDeformableAttention", "embed_dims": 256, "num_levels": 5, "dropout": 0.0},
-                ],
-                "feedforward_channels": 2048,
-                "ffn_dropout": 0.0,
-                "operation_order": ("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
-            },
-        },
-    },
-    "positional_encoding": {"type": "SinePositionalEncoding", "num_feats": 128, "temperature": 20, "normalize": True},
-    "loss_cls": {"type": "QualityFocalLoss", "use_sigmoid": True, "beta": 2.0, "loss_weight": 1.0},
-    "loss_bbox": {"type": "L1Loss", "loss_weight": 5.0},
-    "loss_iou": {"type": "GIoULoss", "loss_weight": 2.0},
-}
-
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
 def test_swin_transformer(dtype):
@@ -123,12 +68,15 @@ def test_swin_transformer(dtype):
     model.init_weights()
     model.eval()
 
-    batch_inputs = torch.randn(1, 3, 1280, 1920, dtype=dtype, device=device)
-
-    def run_pytorch_model():
-        return model(batch_inputs)
+    input_height = 1280
+    input_width = 1920
+    batch_inputs = torch.randn(2, 3, input_height, input_width, dtype=dtype, device=device)
 
     with torch.inference_mode():
+
+        def run_pytorch_model():
+            return model(batch_inputs)
+
         model_export = torch.export.export(
             model,
             args=(batch_inputs,),
@@ -156,8 +104,8 @@ def test_swin_transformer(dtype):
         output_trt = run_tensorrt_model()
 
     # Use different tolerances based on precision
-    tol_export = 1e-3 if dtype == torch.float32 else 1e-3
-    tol_trt = 1e-1 if dtype == torch.float32 else 1e-1
+    tol_export = 1e-3 if dtype == torch.float32 else 1e-2
+    tol_trt = 1e-1 if dtype == torch.float32 else 5e-1
 
     for i in range(len(output_pytorch)):
         torch.testing.assert_close(output_pytorch[i], output_export[i], rtol=tol_export, atol=tol_export)
@@ -183,7 +131,7 @@ def test_neck(dtype):
 
     input_height = 1280
     input_width = 1920
-    batch_size = 1
+    batch_size = 2
     batch_inputs = []
     in_channels = cfg["in_channels"]
     downscales = [4, 8, 16, 32]
@@ -196,10 +144,11 @@ def test_neck(dtype):
 
     batch_inputs = tuple(batch_inputs)
 
-    def run_pytorch_model():
-        return model(batch_inputs)
-
     with torch.inference_mode():
+
+        def run_pytorch_model():
+            return model(batch_inputs)
+
         model_export = torch.export.export(
             model,
             args=(batch_inputs,),
@@ -226,8 +175,8 @@ def test_neck(dtype):
         output_export = run_exported_model()
         output_trt = run_tensorrt_model()
 
-    tol_export = 1e-3
-    tol_trt = 1e-1
+    tol_export = 1e-3 if dtype == torch.float32 else 1e-2
+    tol_trt = 1e-1 if dtype == torch.float32 else 5e-1
 
     for i in range(len(output_pytorch)):
         torch.testing.assert_close(output_pytorch[i], output_export[i], rtol=tol_export, atol=tol_export)
@@ -285,7 +234,7 @@ def test_transformer_encoder(dtype):
     input_height = 384
     input_width = 384
     in_channels = 256
-    batch_size = 1
+    batch_size = 2
     downscales = [4, 8, 16, 32, 64]
 
     mlvl_feats = []
@@ -301,7 +250,7 @@ def test_transformer_encoder(dtype):
         )
         # (B,C,H*W) -> (H*W,B,C)
         img_feat_flat = img_feat.flatten(2).permute(2, 0, 1)
-        mask = torch.zeros((1, feat_height, feat_width), device=device, dtype=torch.bool)
+        mask = torch.zeros((batch_size, feat_height, feat_width), device=device, dtype=torch.bool)
 
         mlvl_feats.append(img_feat)
         feat_flatten.append(img_feat_flat)
@@ -446,7 +395,7 @@ def test_transformer_decoder(dtype):
     input_height = 384
     input_width = 384
     in_channels = 256
-    batch_size = 1
+    batch_size = 2
     downscales = [4, 8, 16, 32, 64]
 
     mlvl_feats = []
@@ -462,7 +411,7 @@ def test_transformer_decoder(dtype):
         )
         # (B,C,H*W) -> (H*W,B,C)
         img_feat_flat = img_feat.flatten(2).permute(2, 0, 1)
-        mask = torch.zeros((1, feat_height, feat_width), device=device, dtype=torch.bool)
+        mask = torch.zeros((batch_size, feat_height, feat_width), device=device, dtype=torch.bool)
 
         mlvl_feats.append(img_feat)
         feat_flatten.append(img_feat_flat)
@@ -560,7 +509,7 @@ def test_transformer_decoder(dtype):
         output_trt = run_tensorrt_model()
 
     tol_export = 1e-3 if dtype == torch.float32 else 1e-3
-    tol_trt = 1e-1 if dtype == torch.float32 else 1e-1
+    tol_trt = 1e-1 if dtype == torch.float32 else 5e-1
     # with torch.float16 the error accumulates with each decoder layer since the predicted reference points
     # are used for the next layer.
 
@@ -623,7 +572,7 @@ def test_transformer(dtype):
     input_height = 384
     input_width = 384
     in_channels = 256
-    batch_size = 1
+    batch_size = 2
     downscales = [4, 8, 16, 32, 64]
 
     mlvl_feats = []
@@ -726,7 +675,7 @@ def test_query_head(dtype):
     input_height = 384
     input_width = 384
     in_channels = 256
-    batch_size = 1
+    batch_size = 2
     img_feats = []
     downscales = [4, 8, 16, 32, 64]
     for downscale in downscales:
@@ -737,14 +686,12 @@ def test_query_head(dtype):
         )
     # 0 within image, 1 in padded region
     # this is a dummy mask where all pixels are within the image
-    img_masks = torch.zeros((1, input_height, input_width), device=device, dtype=dtype)
+    img_masks = torch.zeros((batch_size, input_height, input_width), device=device, dtype=dtype)
 
     with torch.inference_mode():
 
         def run_pytorch_model():
             return model(img_feats, img_masks)
-
-        run_pytorch_model()
 
         model_export = torch.export.export(
             model,

@@ -67,7 +67,6 @@ class SinePositionalEncoding(BaseModule):
             pos (Tensor): Returned position embedding with shape
                 [bs, num_feats*2, h, w].
         """
-        assert not (mask is None and input is None)
 
         B, H, W = mask.size()
         device = mask.device

@@ -335,10 +335,15 @@ class Inferencer:
         for i, data_samples in enumerate(batch_data_samples):
             unpad_h, unpad_w = data_samples.metainfo.get("img_unpadded_shape", (H, W))
             img_masks[i, :unpad_h, :unpad_w] = 0
+        # predictions is a tuple of (boxes, scores, labels)
+        # boxes.shape (bs,max_per_img,4)
+        # scores.shape (bs,max_per_img)
+        # labels.shape (bs,max_per_img)
+        # where max_per_img is the maximum number of detections per image
         predictions = self.model(batch_inputs, img_masks)
-        predictions = self.postprocess_predictions(predictions)
+        pp_predictions = self.postprocess_predictions(*predictions)
         results_list = []
-        for i, (boxes, scores, labels) in enumerate(predictions):
+        for i, (boxes, scores, labels) in enumerate(pp_predictions):
 
             # rescale to the original image size
             scale_factor = batch_data_samples[i].metainfo["scale_factor"]
@@ -351,13 +356,15 @@ class Inferencer:
             results_list.append(results)
         return results_list
 
-    def postprocess_predictions(self, predictions):
+    def postprocess_predictions(
+        self, batch_boxes: torch.Tensor, batch_scores: torch.Tensor, batch_labels: torch.Tensor
+    ) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """
         TensorRT requires static output shapes so the score thresholding and
         batch_nms had to be moved outside of the model to the post-processing stage
         """
         processed_predictions = []
-        for boxes, scores, labels in predictions:
+        for boxes, scores, labels in zip(batch_boxes, batch_scores, batch_labels):
             if self.score_threshold > 0:
                 valid_mask = scores > self.score_threshold
                 # TODO: handle case where valid_mask is all False

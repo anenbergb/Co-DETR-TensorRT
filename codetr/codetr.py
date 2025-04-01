@@ -65,40 +65,23 @@ class CoDETR(nn.Module):
         self.query_head = CoDINOHead(**query_head)
         self.query_head.init_weights()
 
-        self.train_cfg = train_cfg
-        self.test_cfg = test_cfg
-
-    def forward(self, batch_inputs: Tensor, img_masks: Tensor) -> List[Tuple[Tensor, Tensor, Tensor]]:
+    def forward(self, batch_inputs: Tensor, img_masks: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """Predict results from a batch of inputs and data samples with post-
         processing.
 
         Args:
             batch_inputs (Tensor): Inputs, has shape (bs, dim, H, W).
-            batch_data_samples (List[:obj:`DetDataSample`]): The batch
-                data samples. It usually includes information such
-                as `gt_instance` or `gt_panoptic_seg` or `gt_sem_seg`.
-            rescale (bool): Whether to rescale the results.
-                Defaults to True.
 
         Returns:
-            list[:obj:`DetDataSample`]: Detection results of the input images.
-            Each DetDataSample usually contain 'pred_instances'. And the
-            `pred_instances` usually contains following keys.
 
-            - scores (Tensor): Classification scores, has a shape
-              (num_instance, )
-            - labels (Tensor): Labels of bboxes, has a shape
-              (num_instances, ).
-            - bboxes (Tensor): Has a shape (num_instances, 4),
-              the last dimension 4 arrange as (x1, y1, x2, y2).
         """
         assert self.eval_module == "detr"
 
         # (bs,dim,H,W) -> List[ (bs,dim,H,W), ...]
         image_feats = self.backbone(batch_inputs)
         image_feats = self.neck(image_feats)
-        results_list = self.query_head(image_feats, img_masks)
-        return results_list
+        predictions = self.query_head(image_feats, img_masks)
+        return predictions
 
 
 def get_dataset_meta(checkpoint):

@@ -312,13 +312,13 @@ def make_encoder_output_proposals(reference_points, level_counts):
             after a inverse sigmoid, has shape \
             (bs, num_keys, 4).
     """
-
+    batch_size, num_keys = reference_points.shape[:2]
     # Create values tensor [0, 1, 2, 3, 4]
     lvl_indices = torch.arange(level_counts.shape[0], dtype=reference_points.dtype, device=reference_points.device)
     # Repeat each value based on its count
     lvl_repeated = torch.repeat_interleave(lvl_indices, level_counts)  # (num_keys,)
     width = 0.05 * (2.0**lvl_repeated)  # (num_keys,)
-    width = width.view(1, -1, 1)  # (1,num_keys,1)
+    width = width.expand(batch_size, num_keys).view(batch_size, num_keys, 1)  # (1,num_keys,1)
     # reference points (bs,num_keys,2)
     output_proposals = torch.cat([reference_points, width, width], dim=-1)  # (bs,num_keys,4)
     output_proposals = torch.log(output_proposals / (1 - output_proposals))
@@ -326,9 +326,10 @@ def make_encoder_output_proposals(reference_points, level_counts):
 
 
 def make_encoder_output_proposals_export(reference_points, mlvl_masks):
+    batch_size, num_keys = reference_points.shape[:2]
     lvl_repeated = get_lvl_repeated(mlvl_masks, dtype=reference_points.dtype)  # (num_keys,)
     width = 0.05 * (2.0**lvl_repeated)  # (num_keys,)
-    width = width.view(1, -1, 1)  # (1,num_keys,1)
+    width = width.expand(batch_size, num_keys).view(batch_size, num_keys, 1)  # (1,num_keys,1)
     # reference points (bs,num_keys,2)
     output_proposals = torch.cat([reference_points, width, width], dim=-1)  # (bs,num_keys,4)
     output_proposals = torch.log(output_proposals / (1 - output_proposals))
