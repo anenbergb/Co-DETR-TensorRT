@@ -42,6 +42,8 @@ class Inferencer:
             self.iou_threshold = test_cfg["nms"].get("iou_threshold", 0.8)
 
         assert self.cfg.model.data_preprocessor.pop("type") == "DetDataPreprocessor"
+        # since the image will already be loaded in RGB, it's not necessary to reorder the channels from BGR -> RGB
+        self.cfg.model.data_preprocessor["bgr_to_rgb"] = False
         self.data_preprocessor = DetDataPreprocessor(**self.cfg.model.data_preprocessor)
 
         self.pipeline = self._init_pipeline(self.cfg)
@@ -394,7 +396,11 @@ class Inferencer:
         no_save_pred: bool = True,
         out_dir: str = "",
         device: str = "cuda:0",
+        dtype: torch.dtype = torch.float32,
     ):
+        """
+        Input image is expected to be a numpy array of shape (H, W, 3) in RGB format.
+        """
         results_dict = {"predictions": [], "visualization": []}
         for image in images:
             data = self.pipeline(image)  # dict containing keys "inputs" and "data_samples"
@@ -406,7 +412,7 @@ class Inferencer:
             # data["data_samples"] is a list of DetDataSample objects
             with torch.no_grad():
                 data_processed = self.data_preprocessor(data, False)
-                batch_inputs = data_processed["inputs"].to(device)
+                batch_inputs = data_processed["inputs"].to(device).to(dtype)
                 batch_data_samples = data_processed["data_samples"]
                 results_list = self.run_inference(batch_inputs, batch_data_samples)
 

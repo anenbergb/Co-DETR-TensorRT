@@ -1,7 +1,9 @@
 import os
+import argparse
+
 import torch
 import torch_tensorrt
-import argparse
+from torch.utils import benchmark
 
 import mmcv
 from mmengine.dataset import Compose
@@ -103,13 +105,13 @@ def benchmark_runtime(run_pytorch_model, run_tensorrt_model, iterations=10):
         _ = run_pytorch_model()
         _ = run_tensorrt_model()
 
-        t0 = torch.benchmark.Timer(
+        t0 = benchmark.Timer(
             stmt="run_pytorch_model()",
             globals={"run_pytorch_model": run_pytorch_model},
             num_threads=1,
         )
 
-        t1 = torch.benchmark.Timer(
+        t1 = benchmark.Timer(
             stmt="run_tensorrt_model()",
             globals={"run_tensorrt_model": run_tensorrt_model},
             num_threads=1,
@@ -125,7 +127,7 @@ def benchmark_runtime(run_pytorch_model, run_tensorrt_model, iterations=10):
         # Calculate speedups
         speedup_trt = pytorch_time.mean / tensorrt_time.mean
 
-        print(f"\nTensorRT speedup: {speedup_trt:.2f}x")
+        print(f"\nTensorRT speedup: {speedup_trt:.2f}x\n")
 
 
 def main():
@@ -198,8 +200,8 @@ def main():
         print(f"  labels: {output_trt[2].shape}")
 
         torch.cuda.empty_cache()
-        benchmark_runtime(run_pytorch_model, run_tensorrt_model, run_tensorrt_model, iterations=args.iterations)
-        torch.cuda.empty.cache()
+        benchmark_runtime(run_pytorch_model, run_tensorrt_model, iterations=args.iterations)
+        torch.cuda.empty_cache()
         # Save the model if requested
         os.makedirs(args.output, exist_ok=True)
         save_model(os.path.join(args.output, "codetr.ep"), model_export, (batch_inputs, img_masks))
