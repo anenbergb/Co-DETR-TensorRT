@@ -88,9 +88,9 @@ train_dataloader = dict(
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    # dict(type='Resize', scale=(2048, 1280), keep_ratio=True),
-    dict(type='Resize', scale=(1920, 1280), keep_ratio=True), # assume the image is horizontal
-    dict(type="Pad", size=(1920, 1280)),
+    # larger image (1920,1280)
+    dict(type='Resize', scale=(1152, 768), keep_ratio=True), # assume the image is horizontal
+    dict(type="Pad", size=(1152, 768)),
     dict(type='LoadAnnotations', with_bbox=True),
     dict(
         type='PackDetInputs',

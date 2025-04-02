@@ -405,7 +405,6 @@ class Inferencer:
             # data["inputs"] is a list of torch tensors of shape (3, H, W)
             # data["data_samples"] is a list of DetDataSample objects
             with torch.no_grad():
-                import ipdb; ipdb.set_trace()
                 data_processed = self.data_preprocessor(data, False)
                 batch_inputs = data_processed["inputs"].to(device)
                 batch_data_samples = data_processed["data_samples"]

@@ -4,10 +4,7 @@ import os
 
 from codetr import build_CoDETR
 from codetr.swin import SwinTransformer
-from codetr.co_dino_head import CoDINOHead
 from codetr.transformer import (
-    DetrTransformerEncoder,
-    DinoTransformerDecoder,
     get_reference_points,
     make_encoder_output_proposals,
 )
@@ -68,8 +65,8 @@ def test_swin_transformer(dtype):
     model.init_weights()
     model.eval()
 
-    input_height = 1280
-    input_width = 1920
+    input_height = 768
+    input_width = 1152
     batch_inputs = torch.randn(2, 3, input_height, input_width, dtype=dtype, device=device)
 
     with torch.inference_mode():
@@ -126,11 +123,10 @@ def test_neck(dtype):
 
     cfg = Config(neck_config)
     model = MODELS.build(cfg).to(device).to(dtype)
-    # model.init_weights()
     model.eval()
 
-    input_height = 1280
-    input_width = 1920
+    input_height = 768
+    input_width = 1152
     batch_size = 2
     batch_inputs = []
     in_channels = cfg["in_channels"]
@@ -736,11 +732,9 @@ def test_codetr(dtype):
     model = build_CoDETR(model_file, device=device).to(dtype)
     model.eval()
 
-    # input_height = 384
-    # input_width = 384
     batch_size = 1
-    input_height = 1280
-    input_width = 1920
+    input_height = 768
+    input_width = 1152
     batch_inputs = torch.randn(batch_size, 3, input_height, input_width, dtype=dtype, device=device)
     # 0 within image, 1 in padded region
     # this is a dummy mask where all pixels are within the image
@@ -751,7 +745,6 @@ def test_codetr(dtype):
         def run_pytorch_model():
             return model(batch_inputs, img_masks)
 
-        run_pytorch_model()
         model_export = torch.export.export(
             model,
             args=(batch_inputs, img_masks),
