@@ -9,6 +9,7 @@ from mmengine.config import Config
 
 from codetr import build_CoDETR
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Export CoDETR model to TensorRT")
     PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
@@ -45,13 +46,19 @@ def parse_args():
         "--output",
         type=str,
         default="codetr_tensorrt",
-        help="Output file for TensorRT model (if saving). Both the 'exported_program' .ep and 'torchscript' .ts "
-        "output formats will be saved.  PyTorch only supports Python runtime for an ExportedProgram. For C++ deployment, use a TorchScript file.",
+        help="Output directory to save results including the exported TensorRT model and "
+        "the input image with predicted boxes overlayed. "
+        "PyTorch only supports Python runtime for an ExportedProgram. For C++ deployment, use a TorchScript file.",
     )
-    parser.add_argument("--save", action="store_true", help="Save compiled model to disk")
     parser.add_argument("--height", type=int, default=768, help="Input height")
     parser.add_argument("--width", type=int, default=1152, help="Input width")
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size for inference")
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=10,
+        help="Number of iterations to run for benchmarking",
+    )
     return parser.parse_args()
 
 
@@ -59,9 +66,11 @@ def get_test_pipeline(height=768, width=1152):
     return Compose(
         [
             dict(type="mmdet.InferencerLoader"),
-            dict(type="Resize", scale=(width, height), keep_ratio=True),
-            dict(type="Pad", size=(width, height)),
-            dict(type="PackDetInputs", meta_keys=("ori_shape", "img_shape", "scale_factor", "img_unpadded_shape")),
+            dict(type="mmdet.Resize", scale=(width, height), keep_ratio=True),
+            dict(type="mmdet.Pad", size=(width, height)),
+            dict(
+                type="mmdet.PackDetInputs", meta_keys=("ori_shape", "img_shape", "scale_factor", "img_unpadded_shape")
+            ),
         ]
     )
 
@@ -88,6 +97,37 @@ def preprocess_image(image_array, cfg, height, width, batch_size=1):
     return batch_inputs, img_masks
 
 
+def benchmark_runtime(run_pytorch_model, run_tensorrt_model, iterations=10):
+    with torch.inference_mode():
+        # Warm-up runs
+        _ = run_pytorch_model()
+        _ = run_tensorrt_model()
+
+        t0 = torch.benchmark.Timer(
+            stmt="run_pytorch_model()",
+            globals={"run_pytorch_model": run_pytorch_model},
+            num_threads=1,
+        )
+
+        t1 = torch.benchmark.Timer(
+            stmt="run_tensorrt_model()",
+            globals={"run_tensorrt_model": run_tensorrt_model},
+            num_threads=1,
+        )
+
+        # Run benchmarks
+        pytorch_time = t0.timeit(iterations)
+        tensorrt_time = t1.timeit(iterations)
+
+        print(f"\nPyTorch implementation: {pytorch_time}")
+        print(f"TensorRT implementation: {tensorrt_time}")
+
+        # Calculate speedups
+        speedup_trt = pytorch_time.mean / tensorrt_time.mean
+
+        print(f"\nTensorRT speedup: {speedup_trt:.2f}x")
+
+
 def main():
     args = parse_args()
 
@@ -103,9 +143,9 @@ def main():
         print(f"Loading weights from {args.weights}")
 
     # Build CoDETR model
-    detr_model, dataset_meta = build_CoDETR(args.model, args.weights, device)
-    detr_model.to(dtype)
-    detr_model.eval()
+    model, dataset_meta = build_CoDETR(args.model, args.weights, device)
+    model.to(dtype)
+    model.eval()
 
     # Get model config for preprocessing
     cfg = Config.fromfile(args.model)
@@ -122,18 +162,20 @@ def main():
     print(f"Input tensor shape: {batch_inputs.shape}")
     print(f"Mask tensor shape: {img_masks.shape}")
 
-    # Export model to TorchScript and then to TensorRT
+    # Export model to ExportedProgram and then to TensorRT
     print(f"Exporting model with precision={args.dtype}, optimization_level={args.optimization_level}")
     with torch.inference_mode():
-        output_pytorch = detr_model(batch_inputs, img_masks)
 
-        # First export to TorchScript
+        def run_pytorch_model():
+            return model(batch_inputs, img_masks)
+
+        # First export to ExportedProgram
         model_export = torch.export.export(
-            detr_model,
+            model,
             args=(batch_inputs, img_masks),
             strict=True,
         )
-        print(f"✅ Model exported to TorchScript")
+        print(f"✅ Model exported to ExportedProgram")
 
         # Then compile with TensorRT
         model_trt = torch_tensorrt.dynamo.compile(
@@ -144,32 +186,31 @@ def main():
         )
         print(f"✅ Model compiled to TensorRT at optimization level: {args.optimization_level}")
 
+        def run_tensorrt_model():
+            return model_trt(batch_inputs, img_masks)
+
         # Test inference
-        output_trt = model_trt(batch_inputs, img_masks)
+        output_trt = run_tensorrt_model()
 
-    print(f"Test inference successful! Output shapes:")
-    print(f"  boxes: {output_trt[0].shape}")
-    print(f"  scores: {output_trt[1].shape}")
-    print(f"  labels: {output_trt[2].shape}")
+        print(f"Test inference successful! Output shapes:")
+        print(f"  boxes: {output_trt[0].shape}")
+        print(f"  scores: {output_trt[1].shape}")
+        print(f"  labels: {output_trt[2].shape}")
 
-    for i, name in enumerate(["boxes", "scores", "labels"]):
-        abs_diff = torch.abs(output_pytorch[i] - output_trt[i])
-        top_5_diff, top_5_locations = torch.topk(abs_diff.flatten(), 5)
-        print(f"Top 5 absolute differences for {name}: {top_5_diff.tolist()} at locations {top_5_locations.tolist()}")
+        torch.cuda.empty_cache()
+        benchmark_runtime(run_pytorch_model, run_tensorrt_model, run_tensorrt_model, iterations=args.iterations)
+        torch.cuda.empty.cache()
+        # Save the model if requested
+        os.makedirs(args.output, exist_ok=True)
+        save_model(os.path.join(args.output, "codetr.ep"), model_export, (batch_inputs, img_masks))
+        save_model(os.path.join(args.output, "codetr.ts"), model_trt, (batch_inputs, img_masks))
 
-    # Save the model if requested
-    if args.save:
-        output_path = os.path.splitext(args.output)[0]
-        print(f"Saving TensorRT model to {output_path}.ep")
-        torch_tensorrt.save(
-            model_trt, output_path + ".ep", inputs=(batch_inputs, img_masks), output_format="exported_program"
-        )
-        print(f"✅ Model saved successfully")
-        print(f"Saving TensorRT model to {output_path}.ts")
-        torch_tensorrt.save(
-            model_trt, output_path + ".ts", inputs=(batch_inputs, img_masks), output_format="torchscript"
-        )
-        print(f"✅ Model saved successfully")
+
+def save_model(save_path, model, inputs):
+    output_format = "exported_program" if save_path.endswith(".ep") else "torchscript"
+    print(f"Saving TensorRT model to {save_path}")
+    torch_tensorrt.save(model, save_path, inputs=inputs, output_format=output_format)
+    print(f"✅ Model saved successfully")
 
 
 if __name__ == "__main__":
