@@ -267,8 +267,6 @@ class Inferencer:
         result_dict["visualization"] = visualization
         return result_dict
 
-    # TODO: The data format and fields saved in json need further discussion.
-    #  Maybe should include model name, timestamp, filename, image info etc.
     def pred2dict(self, data_sample: DetDataSample, pred_out_dir: str = "") -> Dict:
         """Extract elements necessary to represent a prediction into a
         dictionary.
@@ -407,6 +405,7 @@ class Inferencer:
             # data["inputs"] is a list of torch tensors of shape (3, H, W)
             # data["data_samples"] is a list of DetDataSample objects
             with torch.no_grad():
+                import ipdb; ipdb.set_trace()
                 data_processed = self.data_preprocessor(data, False)
                 batch_inputs = data_processed["inputs"].to(device)
                 batch_data_samples = data_processed["data_samples"]
