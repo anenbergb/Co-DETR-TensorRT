@@ -9,14 +9,6 @@ from mmengine.model import BaseModule
 from mmengine.model.weight_init import xavier_init
 from torch.nn.init import normal_
 
-from mmdet.models.layers.transformer import inverse_sigmoid
-
-try:
-    from fairscale.nn.checkpoint import checkpoint_wrapper
-except Exception:
-    checkpoint_wrapper = None
-
-
 from codetr.transformer_mmcv import BaseTransformerLayer
 from codetr.multi_scale_deformable_attention import MultiScaleDeformableAttention
 
@@ -32,7 +24,7 @@ class DetrTransformerEncoder(BaseModule):
     def __init__(
         self,
         post_norm_cfg=dict(type="LN"),
-        with_cp=-1,
+        with_cp=-1,  # ignore_input
         transformerlayers=None,
         num_layers=None,
         init_cfg=None,
@@ -52,17 +44,6 @@ class DetrTransformerEncoder(BaseModule):
         else:
             assert not self.pre_norm, f"Use prenorm in " f"{self.__class__.__name__}," f"Please specify post_norm_cfg"
             self.post_norm = None
-        self.with_cp = with_cp
-        if self.with_cp > 0:
-            if checkpoint_wrapper is None:
-                warnings.warn(
-                    "If you want to reduce GPU memory usage, \
-                              please install fairscale by executing the \
-                              following command: pip install fairscale."
-                )
-                return
-            for i in range(self.with_cp):
-                self.layers[i] = checkpoint_wrapper(self.layers[i])
 
     def forward(
         self,
@@ -392,7 +373,6 @@ def get_valid_ratio(mask, dtype=torch.float32):
 class CoDinoTransformer(BaseModule):
     def __init__(
         self,
-        mixed_selection=True,
         with_pos_coord=True,
         with_coord_feat=True,
         num_co_heads=1,
@@ -410,7 +390,6 @@ class CoDinoTransformer(BaseModule):
         self.decoder = DinoTransformerDecoder(**decoder)
         self.embed_dims = self.encoder.embed_dims
 
-        self.mixed_selection = mixed_selection
         self.with_pos_coord = with_pos_coord
         self.with_coord_feat = with_coord_feat
         self.num_co_heads = num_co_heads

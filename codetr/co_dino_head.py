@@ -1,24 +1,13 @@
-# Copyright (c) OpenMMLab. All rights reserved.
 import copy
 from typing import List, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from mmcv.cnn import Linear
-
-# from mmcv.ops import batched_nms
-from mmengine.structures import InstanceData
-from torch import Tensor
-
 from mmdet.models import DINOHead
-from mmdet.models.layers import CdnQueryGenerator
-from mmdet.models.layers.transformer import inverse_sigmoid
-from mmdet.models.utils import multi_apply
-from mmdet.registry import MODELS
-from mmdet.structures import SampleList
-from mmdet.structures.bbox import bbox_cxcywh_to_xyxy, bbox_overlaps, bbox_xyxy_to_cxcywh
-from mmdet.utils import InstanceList, reduce_mean
+from mmdet.structures.bbox import bbox_cxcywh_to_xyxy
 
 from codetr.transformer import CoDinoTransformer
 from codetr.positional_encoding import SinePositionalEncoding
@@ -31,20 +20,15 @@ class CoDINOHead(DINOHead):
         *args,
         num_query=900,
         transformer=None,
-        in_channels=2048,
-        max_pos_coords=300,
+        in_channels=2048,  # ignore this input
+        max_pos_coords=300,  # ignore this input
         dn_cfg=None,  # ignore this input
-        use_zero_padding=False,
+        use_zero_padding=False,  # ignore this input
         positional_encoding=dict(type="SinePositionalEncoding", num_feats=128, normalize=True),
         **kwargs,
     ):
-        self.with_box_refine = True
-        self.mixed_selection = True
-        self.in_channels = in_channels
-        self.max_pos_coords = max_pos_coords
         self.positional_encoding = positional_encoding
         self.num_query = num_query
-        self.use_zero_padding = use_zero_padding
 
         if "two_stage_num_proposals" in transformer:
             assert (
@@ -53,8 +37,6 @@ class CoDINOHead(DINOHead):
         else:
             transformer["two_stage_num_proposals"] = num_query
         transformer["as_two_stage"] = True
-        if self.mixed_selection:
-            transformer["mixed_selection"] = self.mixed_selection
         self.transformer = transformer
 
         super().__init__(*args, **kwargs)
@@ -100,13 +82,11 @@ class CoDINOHead(DINOHead):
             nn.GroupNorm(32, self.embed_dims),
         )
 
-    # specializing this to only work for batch_size = 1
-    # batch input shape and img_shape are the same
     def forward(
         self,
-        mlvl_feats: List[Tensor],
-        img_masks: Tensor,
-    ) -> Tuple[Tensor, Tensor, Tensor]:
+        mlvl_feats: List[torch.Tensor],
+        img_masks: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         image_height, image_width = img_masks.shape[-2:]
         mlvl_masks = []
         mlvl_positional_encodings = []
@@ -124,7 +104,7 @@ class CoDINOHead(DINOHead):
             mlvl_feats,
             mlvl_masks,
             mlvl_positional_encodings,
-            reg_branches=self.reg_branches if self.with_box_refine else None,
+            reg_branches=self.reg_branches,
             cls_branches=self.cls_branches if self.as_two_stage else None,
         )
 

@@ -693,6 +693,7 @@ def test_query_head(dtype):
         def run_pytorch_model():
             return model(img_feats, img_masks)
 
+        run_pytorch_model()
         model_export = torch.export.export(
             model,
             args=(img_feats, img_masks),
@@ -713,6 +714,64 @@ def test_query_head(dtype):
 
         def run_tensorrt_model():
             return model_trt(img_feats, img_masks)
+
+    benchmark_runtime(run_pytorch_model, run_exported_model, run_tensorrt_model, iterations=iterations)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [torch.float32, torch.float16],
+)
+def test_codetr(dtype):
+    print(f"Testing CoDETR with dtype={dtype}")
+
+    torch.manual_seed(42)  # For reproducibility
+
+    iterations = 3
+    device = "cuda:0"
+    optimization_level = 3  # default is 3, max is 5
+
+    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    model_file = os.path.join(PROJECT_ROOT, "configs/co_dino_5scale_swin_l_16xb1_16e_o365tococo.py")
+    model = build_CoDETR(model_file, device=device).to(dtype)
+    model.eval()
+
+    # input_height = 384
+    # input_width = 384
+    batch_size = 1
+    input_height = 1280
+    input_width = 1920
+    batch_inputs = torch.randn(batch_size, 3, input_height, input_width, dtype=dtype, device=device)
+    # 0 within image, 1 in padded region
+    # this is a dummy mask where all pixels are within the image
+    img_masks = torch.zeros((batch_size, input_height, input_width), device=device, dtype=dtype)
+
+    with torch.inference_mode():
+
+        def run_pytorch_model():
+            return model(batch_inputs, img_masks)
+
+        run_pytorch_model()
+        model_export = torch.export.export(
+            model,
+            args=(batch_inputs, img_masks),
+            strict=True,
+        )
+        print(f"✅ Exported {type(model)} to {type(model_export)} with dtype={dtype}")
+
+        def run_exported_model():
+            return model_export.module()(batch_inputs, img_masks)
+
+        model_trt = torch_tensorrt.dynamo.compile(
+            model_export,
+            inputs=(batch_inputs, img_masks),
+            enabled_precisions=(dtype,),
+            optimization_level=optimization_level,
+        )
+        print(f"✅ Compiled {type(model_export)} to TensorRT with dtype={dtype}")
+
+        def run_tensorrt_model():
+            return model_trt(batch_inputs, img_masks)
 
     benchmark_runtime(run_pytorch_model, run_exported_model, run_tensorrt_model, iterations=iterations)
 

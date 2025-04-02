@@ -26,28 +26,12 @@ class CoDETR(nn.Module):
         backbone,
         neck=None,
         query_head=None,  # detr head
-        # rpn_head=None,  # two-stage rpn
-        # roi_head=[None],  # two-stage
-        # bbox_head=[None],  # one-stage
         train_cfg=[None, None],
         test_cfg=[None, None],
-        # Control whether to consider positive samples
-        # from the auxiliary head as additional positive queries.
-        with_pos_coord=True,
-        use_lsj=True,
-        eval_module="detr",
-        # Evaluate the Nth head.
-        # eval_index=0,
-        # data_preprocessor: OptConfigType = None,
-        # init_cfg: OptMultiConfig = None,
         **kwargs,
     ):
         super().__init__()
-        self.with_pos_coord = with_pos_coord
-        self.use_lsj = use_lsj
-
-        assert eval_module in ["detr", "one-stage", "two-stage"]
-        self.eval_module = eval_module
+        # eval_module is detr
 
         assert backbone.pop("type") == "SwinTransformer"
         self.backbone = SwinTransformer(**backbone)
@@ -55,7 +39,6 @@ class CoDETR(nn.Module):
             self.neck = MODELS.build(neck)
 
         assert query_head is not None
-
         head_idx = 0
         query_head.update(
             train_cfg=train_cfg[head_idx] if (train_cfg is not None and train_cfg[head_idx] is not None) else None
@@ -75,8 +58,6 @@ class CoDETR(nn.Module):
         Returns:
 
         """
-        assert self.eval_module == "detr"
-
         # (bs,dim,H,W) -> List[ (bs,dim,H,W), ...]
         image_feats = self.backbone(batch_inputs)
         image_feats = self.neck(image_feats)
