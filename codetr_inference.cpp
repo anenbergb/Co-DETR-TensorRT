@@ -1,6 +1,7 @@
 #include <torch/script.h>
 #include <torch/torch.h>
-#include <torchvision/vision.h>
+#include <torchvision/ops/nms.h>
+#include <torch_tensorrt/torch_tensorrt.h>
 #include <opencv2/opencv.hpp>
 #include <iostream>
 #include <vector>
@@ -8,8 +9,7 @@
 #include <chrono>
 #include <argparse/argparse.hpp>
 
-// Function to preprocess image
-std::tuple<torch::Tensor, torch::Tensor> preprocess_image(const cv::Mat& image, int target_height, int target_width) {
+std::tuple<torch::Tensor, torch::Tensor, float> preprocess_image(const cv::Mat& image, int target_height, int target_width) {
     // Convert BGR to RGB
     cv::Mat rgb_image;
     cv::cvtColor(image, rgb_image, cv::COLOR_BGR2RGB);
@@ -56,14 +56,14 @@ std::tuple<torch::Tensor, torch::Tensor> preprocess_image(const cv::Mat& image, 
     // Normalize image using vectorized operations
     image_tensor = (image_tensor - mean_tensor) / std_tensor;
     
-    return std::make_tuple(image_tensor, mask_tensor);
+    return std::make_tuple(image_tensor, mask_tensor, scale);
 }
 
-// Function to postprocess predictions
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> postprocess_predictions(
-    const torch::Tensor& boxes,
-    const torch::Tensor& scores,
-    const torch::Tensor& labels,
+    const torch::Tensor& boxes, // (1,300,4)
+    const torch::Tensor& scores, // (1,300)
+    const torch::Tensor& labels, // (1,300)
+    float scale,
     float score_threshold = 0.3,
     float iou_threshold = 0.5) {
     
@@ -76,14 +76,15 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> postprocess_predictions(
     // Apply NMS
     auto keep = vision::ops::nms(valid_boxes, valid_scores, iou_threshold);
     
-    return std::make_tuple(
-        valid_boxes.index_select(0, keep),
-        valid_scores.index_select(0, keep),
-        valid_labels.index_select(0, keep)
-    );
+    valid_boxes = valid_boxes.index_select(0, keep);
+    valid_scores = valid_scores.index_select(0, keep);
+    valid_labels = valid_labels.index_select(0, keep);
+
+    valid_boxes /= scale;
+
+    return std::make_tuple(valid_boxes, valid_scores, valid_labels);
 }
 
-// Function to draw boxes on image
 void draw_boxes(cv::Mat& image, const torch::Tensor& boxes, const torch::Tensor& scores, const torch::Tensor& labels) {
     auto boxes_a = boxes.accessor<float, 2>();
     auto scores_a = scores.accessor<float, 1>();
@@ -152,7 +153,10 @@ int main(int argc, char* argv[]) {
         
         // Load model
         std::cout << "Loading model from: " << model_path << std::endl;
+        
+        // Load the model using torch_tensorrt
         torch::jit::script::Module model = torch::jit::load(model_path);
+        // model = (model_path, torch::kCUDA);
         model.to(torch::kCUDA);
         model.to(dtype);
         model.eval();
@@ -168,7 +172,7 @@ int main(int argc, char* argv[]) {
         // Preprocess image
         int target_height = 768;
         int target_width = 1152;
-        auto [input_tensor, mask_tensor] = preprocess_image(image, target_height, target_width);
+        auto [input_tensor, mask_tensor, scale] = preprocess_image(image, target_height, target_width);
         input_tensor = input_tensor.to(torch::kCUDA).to(dtype);
         mask_tensor = mask_tensor.to(torch::kCUDA).to(dtype);
         
@@ -190,7 +194,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Inference time: " << duration.count() << " ms" << std::endl;
         
         // Postprocess predictions
-        auto [final_boxes, final_scores, final_labels] = postprocess_predictions(boxes, scores, labels);
+        auto [final_boxes, final_scores, final_labels] = postprocess_predictions(boxes, scores, labels, scale);
         
         // Draw boxes on original image
         draw_boxes(image, final_boxes, final_scores, final_labels);
