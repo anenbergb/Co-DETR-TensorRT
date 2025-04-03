@@ -29,17 +29,28 @@ from mmdet.utils import InstanceList
 
 
 class Inferencer:
-    def __init__(self, model, model_file: str, dataset_meta):
+    def __init__(
+        self,
+        model,
+        model_file: str,
+        dataset_meta,
+        score_threshold: Optional[float] = None,
+        iou_threshold: Optional[float] = None,
+    ):
         self.model = model
         self.dataset_meta = dataset_meta
 
         self.cfg = Config.fromfile(model_file)
         test_cfg = self.cfg.model.test_cfg[0]  # the 0th test_cfg is for the query_head
         self.score_threshold = test_cfg.get("score_thr", 0)
+        if score_threshold is not None:
+            self.score_threshold = score_threshold
         self.with_nms = False
         if "nms" in test_cfg:
             self.with_nms = True
             self.iou_threshold = test_cfg["nms"].get("iou_threshold", 0.8)
+            if iou_threshold is not None:
+                self.iou_threshold = iou_threshold
 
         assert self.cfg.model.data_preprocessor.pop("type") == "DetDataPreprocessor"
         # since the image will already be loaded in RGB, it's not necessary to reorder the channels from BGR -> RGB

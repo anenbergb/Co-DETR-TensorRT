@@ -1,13 +1,21 @@
 import os
+import sys
 import argparse
+from typing import List, Tuple, Dict, Any
+import numpy as np
 
 import torch
 import torch_tensorrt
 from torch.utils import benchmark
+from torchvision.ops import batched_nms
 
 import mmcv
 from mmengine.dataset import Compose
 from mmengine.config import Config
+from mmengine.structures import InstanceData
+
+from mmdet.structures import DetDataSample
+from mmdet.visualization import DetLocalVisualizer
 
 from codetr import build_CoDETR
 
@@ -55,11 +63,25 @@ def parse_args():
     parser.add_argument("--height", type=int, default=768, help="Input height")
     parser.add_argument("--width", type=int, default=1152, help="Input width")
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size for inference")
+    # Benchmarking
     parser.add_argument(
         "--iterations",
         type=int,
         default=10,
         help="Number of iterations to run for benchmarking",
+    )
+    # Visualization
+    parser.add_argument(
+        "--score-threshold",
+        type=float,
+        default=0.3,
+        help="Score threshold for filtering predictions",
+    )
+    parser.add_argument(
+        "--iou-threshold",
+        type=float,
+        default=0.5,
+        help="IoU threshold used in non-maximum suppression for suppressing false positive detections",
     )
     return parser.parse_args()
 
@@ -87,16 +109,16 @@ def preprocess_image(image_array, cfg, height, width, batch_size=1):
 
     data = pipeline(image_array)
     image_tensor = data["inputs"].to(torch.float32)  # (3,height,width)
-    data_samples = data["data_samples"]
+    data_sample = data["data_samples"]
 
     batch_inputs = image_tensor.unsqueeze(0).repeat(batch_size, 1, 1, 1)  # (batch_size,3,height,width)
     batch_inputs = (batch_inputs - img_mean) / img_std
 
     # 0 within image, 1 in padded region
     img_masks = torch.ones((batch_size, height, width), dtype=batch_inputs.dtype)
-    unpad_h, unpad_w = data_samples.metainfo.get("img_unpadded_shape", (height, width))
+    unpad_h, unpad_w = data_sample.metainfo.get("img_unpadded_shape", (height, width))
     img_masks[:, :unpad_h, :unpad_w] = 0
-    return batch_inputs, img_masks
+    return batch_inputs, img_masks, data_sample
 
 
 def benchmark_runtime(run_pytorch_model, run_tensorrt_model, iterations=10):
@@ -130,6 +152,68 @@ def benchmark_runtime(run_pytorch_model, run_tensorrt_model, iterations=10):
         print(f"\nTensorRT speedup: {speedup_trt:.2f}x\n")
 
 
+class Visualizer:
+    def __init__(
+        self,
+        image_array: np.ndarray,
+        data_sample: DetDataSample,
+        dataset_meta: Dict[str, Any],
+        score_threshold: float = 0.0,
+        iou_threshold: float = 0.8,
+    ):
+        self.image_array = image_array
+        self.data_sample = data_sample
+        self.score_threshold = score_threshold
+        self.iou_threshold = iou_threshold
+        self.visualizer = DetLocalVisualizer(vis_backends=[{"type": "LocalVisBackend", "save_dir": None}])
+        self.visualizer.dataset_meta = dataset_meta
+
+    def postprocess_predictions(
+        self, boxes: torch.Tensor, scores: torch.Tensor, labels: torch.Tensor
+    ) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+
+        if self.score_threshold > 0:
+            valid_mask = scores > self.score_threshold
+            # TODO: handle case where valid_mask is all False
+            scores = scores[valid_mask]
+            boxes = boxes[valid_mask]
+            labels = labels[valid_mask]
+
+        keep_idxs = batched_nms(boxes, scores, labels, self.iou_threshold)
+        boxes = boxes[keep_idxs]
+        scores = scores[keep_idxs]
+        labels = labels[keep_idxs]
+
+        # rescale to the original image size
+        scale_factor = self.data_sample.metainfo["scale_factor"]
+        boxes /= boxes.new_tensor(scale_factor).repeat((1, 2))
+
+        results = InstanceData()
+        results.bboxes = boxes
+        results.scores = scores
+        results.labels = labels
+
+        return results
+
+    def __call__(self, batch_boxes: torch.Tensor, batch_scores: torch.Tensor, batch_labels: torch.Tensor):
+        # only visualize the first image
+        postprocess_predictions = self.postprocess_predictions(batch_boxes[0], batch_scores[0], batch_labels[0])
+        data_sample = self.data_sample.clone()
+        data_sample.pred_instances = postprocess_predictions
+
+        self.visualizer.add_datasample(
+            "image",
+            self.image_array,
+            data_sample=data_sample,
+            draw_gt=False,
+            draw_pred=True,
+            show=False,
+            pred_score_thr=self.score_threshold,
+        )
+        vis = self.visualizer.get_image()
+        return vis
+
+
 def main():
     args = parse_args()
 
@@ -157,7 +241,9 @@ def main():
     image_array = mmcv.imread(args.image, channel_order="rgb")
 
     # Preprocess image to get proper inputs
-    batch_inputs, img_masks = preprocess_image(image_array, cfg, args.height, args.width, args.batch_size)
+    batch_inputs, img_masks, data_sample = preprocess_image(image_array, cfg, args.height, args.width, args.batch_size)
+    visualizer = Visualizer(image_array, data_sample, dataset_meta, args.score_threshold, args.iou_threshold)
+
     batch_inputs = batch_inputs.to(dtype).to(device)
     img_masks = img_masks.to(dtype).to(device)
 
@@ -166,10 +252,17 @@ def main():
 
     # Export model to ExportedProgram and then to TensorRT
     print(f"Exporting model with precision={args.dtype}, optimization_level={args.optimization_level}")
+    os.makedirs(args.output, exist_ok=True)
     with torch.inference_mode():
 
         def run_pytorch_model():
             return model(batch_inputs, img_masks)
+
+        output_pytorch = run_pytorch_model()
+        vis = visualizer(*output_pytorch)
+        vis_path = os.path.join(args.output, "pytorch_output.jpg")
+        mmcv.imwrite(mmcv.rgb2bgr(vis), vis_path)
+        print(f"✅ Pytorch predictions visualized to {vis_path}")
 
         # First export to ExportedProgram
         model_export = torch.export.export(
@@ -199,11 +292,14 @@ def main():
         print(f"  scores: {output_trt[1].shape}")
         print(f"  labels: {output_trt[2].shape}")
 
+        vis = visualizer(*output_trt)
+        vis_path = os.path.join(args.output, "tensorrt_output.jpg")
+        mmcv.imwrite(mmcv.rgb2bgr(vis), vis_path)
+        print(f"✅ TensorRT predictions visualized to {vis_path}")
+
         torch.cuda.empty_cache()
         benchmark_runtime(run_pytorch_model, run_tensorrt_model, iterations=args.iterations)
         torch.cuda.empty_cache()
-        # Save the model if requested
-        os.makedirs(args.output, exist_ok=True)
         save_model(os.path.join(args.output, "codetr.ep"), model_export, (batch_inputs, img_masks))
         save_model(os.path.join(args.output, "codetr.ts"), model_trt, (batch_inputs, img_masks))
 
