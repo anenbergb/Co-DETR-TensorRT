@@ -278,6 +278,11 @@ def main():
             inputs=(batch_inputs, img_masks),
             enabled_precisions=(dtype,),
             optimization_level=args.optimization_level,
+            truncate_double = True,
+            require_full_compilation = False,
+            cache_built_engines=True,
+            reuse_cached_engines=False,
+            engine_cache_dir = os.path.join(args.output, "engine_cache"),
         )
         print(f"✅ Model compiled to TensorRT at optimization level: {args.optimization_level}")
 
@@ -300,8 +305,8 @@ def main():
         torch.cuda.empty_cache()
         benchmark_runtime(run_pytorch_model, run_tensorrt_model, iterations=args.iterations)
         torch.cuda.empty_cache()
-        save_model(os.path.join(args.output, "codetr.ep"), model_export, (batch_inputs, img_masks))
         save_model(os.path.join(args.output, "codetr.ts"), model_trt, (batch_inputs, img_masks))
+        print_tensorrt_model(model_trt, os.path.join(args.output, "tensorrt_model.txt"))
 
 
 def save_model(save_path, model, inputs):
@@ -310,6 +315,14 @@ def save_model(save_path, model, inputs):
     torch_tensorrt.save(model, save_path, inputs=inputs, output_format=output_format)
     print(f"✅ Model saved successfully")
 
+
+def print_tensorrt_model(model, save_path):
+    with open(save_path, "w") as f:
+        f.write("TensorRT model structure:\n")
+        f.write(str(model))
+        f.write("\n\nTensorRT model structure [DEBUG MODE]:\n")
+        f.write(model.print_readable())
+    print(f"✅ TensorRT model structure saved to {save_path}")
 
 if __name__ == "__main__":
     main()
