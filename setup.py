@@ -29,6 +29,7 @@ setup(
         CUDAExtension(
             name="codetr._C",
             sources=[
+                "codetr/csrc/deformable_attention_torch.cpp",
                 "codetr/csrc/ms_deform_attn.cu",
             ],
             extra_compile_args={

@@ -549,18 +549,32 @@ def test_export_and_benchmark(dtype):
     spatial_len = sum([h * w for h, w in spatial_shapes])
     value = torch.rand(spatial_len, bs, embed_dims, device=device, dtype=dtype)
 
-    # Define benchmark functions
-    def run_pytorch_model():
-        return msda(
-            query,
-            value=value,
-            reference_points=reference_points,
-            spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
+    with torch.inference_mode():
+        def run_pytorch_model():
+            return msda(
+                query,
+                value=value,
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+            )
+    
+        run_pytorch_model()
+
+        torch_tensorrt.compile(
+            msda,
+            arg_inputs=(query,),
+            kwarg_inputs={
+                "value": value,
+                "reference_points": reference_points,
+                "spatial_shapes": spatial_shapes,
+                "level_start_index": level_start_index,
+            },
+            enabled_precisions=(dtype,),
+            dryrun=True,
+            min_block_size=1,
         )
 
-    with torch.inference_mode():
-        run_pytorch_model()
         # Export the model
         msda_export = torch.export.export(
             msda,

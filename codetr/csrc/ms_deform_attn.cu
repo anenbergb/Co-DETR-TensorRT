@@ -1,7 +1,3 @@
-#include <torch/library.h>
-#include <torch/extension.h>
-#include <torch/all.h>
-
 #include <cuda.h>
 #include <cuda_runtime.h>
 
@@ -1145,18 +1141,6 @@ for (int n = 0; n < batch / im2col_step_; ++n) {
                 n * im2col_step_ * per_attn_weight_size);
       }));
 }
-}
-
-TORCH_LIBRARY(codetr, m) {
-  m.def("multi_scale_deformable_attention(Tensor value, Tensor spatial_shapes, Tensor level_start_index, Tensor sampling_loc, Tensor attn_weight, int im2col_step) -> Tensor");
-  m.def("multi_scale_deformable_attention_backward(Tensor value, Tensor spatial_shapes, Tensor level_start_index, Tensor sampling_loc, Tensor attn_weight, Tensor grad_output, Tensor(a!) grad_value, Tensor(b!) grad_sampling_loc, Tensor(c!) grad_attn_weight, int im2col_step) -> ()");
-}
-
-// Registers CUDA implementation for ms_deform_attn_forward
-// https://github.com/pytorch/pytorch/blob/main/aten/src/ATen/native/README.md#func
-TORCH_LIBRARY_IMPL(codetr, CUDA, m) {
-  m.impl("multi_scale_deformable_attention", &ms_deform_attn_forward);
-  m.impl("multi_scale_deformable_attention_backward", &ms_deform_attn_backward);
 }
 
 }  // namespace codetr
