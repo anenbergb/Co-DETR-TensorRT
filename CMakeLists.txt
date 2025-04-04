@@ -1,16 +1,16 @@
 cmake_minimum_required(VERSION 3.18)
 project(codetr_inference)
 
-# Set C++ standard
+# C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find required packages
+# Dependencies
 find_package(Torch REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(TorchVision REQUIRED)
 
-# Add argparse library
+# argparse (header-only)
 include(FetchContent)
 FetchContent_Declare(
     argparse
@@ -19,29 +19,18 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(argparse)
 
-# Set torch_tensorrt paths (update these paths according to your installation)
+# Torch-TensorRT config
 if(NOT DEFINED TORCH_TENSORRT_ROOT)
-    message(FATAL_ERROR "TORCH_TENSORRT_ROOT not specified. Please provide it with -DTORCH_TENSORRT_ROOT=/path/to/torch_tensorrt")
+    message(FATAL_ERROR "TORCH_TENSORRT_ROOT not specified. Use -DTORCH_TENSORRT_ROOT=/path/to/torch_tensorrt")
 endif()
 
 set(TORCH_TENSORRT_INCLUDE_DIRS "${TORCH_TENSORRT_ROOT}/include")
-set(TORCH_TENSORRT_LIBRARIES "${TORCH_TENSORRT_ROOT}/lib")
+set(TORCH_TENSORRT_LIBRARY_DIR "${TORCH_TENSORRT_ROOT}/lib")
 
-# Add executable
+# Add the executable
 add_executable(codetr_inference codetr_inference.cpp)
 
-# Link libraries
-target_link_libraries(codetr_inference
-    ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
-    argparse
-    TorchVision::TorchVision
-    ${TORCH_TENSORRT_LIBRARIES}/libtorchtrt.so
-    ${TORCH_TENSORRT_LIBRARIES}/libtorchtrt_runtime.so
-    ${TORCH_TENSORRT_LIBRARIES}/libtorchtrt_plugins.so
-)
-
-# Include directories
+# Include paths
 target_include_directories(codetr_inference PRIVATE
     ${TORCH_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
@@ -50,11 +39,31 @@ target_include_directories(codetr_inference PRIVATE
     ${TORCH_TENSORRT_INCLUDE_DIRS}
 )
 
-# Set CUDA
+# Find Torch-TensorRT shared libraries
+find_library(TORCHTRT_LIB torchtrt PATHS ${TORCH_TENSORRT_LIBRARY_DIR} REQUIRED)
+find_library(TORCHTRT_RUNTIME_LIB torchtrt_runtime PATHS ${TORCH_TENSORRT_LIBRARY_DIR} REQUIRED)
+find_library(TORCHTRT_PLUGINS_LIB torchtrt_plugins PATHS ${TORCH_TENSORRT_LIBRARY_DIR} REQUIRED)
+
+# Add linker flags before Torch-TensorRT libs
+target_link_options(codetr_inference PRIVATE "LINKER:--no-as-needed")
+
+# Link all required libraries
+target_link_libraries(codetr_inference
+    ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
+    TorchVision::TorchVision
+    argparse
+    ${TORCHTRT_LIB}
+    ${TORCHTRT_RUNTIME_LIB}
+    ${TORCHTRT_PLUGINS_LIB}
+)
+
+# Revert linker flag after TRTEngine registration
+target_link_options(codetr_inference PRIVATE "LINKER:--as-needed")
+
+# CUDA config (if required by your model or dependencies)
 set(CMAKE_CUDA_COMPILER /usr/local/cuda/bin/nvcc)
 set(CMAKE_CUDA_HOST_COMPILER ${CMAKE_CXX_COMPILER})
 enable_language(CUDA)
-
-# Set CUDA architecture
 set(CMAKE_CUDA_ARCHITECTURES 89)
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -arch=compute_89 -code=sm_89") 
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -arch=compute_89 -code=sm_89")

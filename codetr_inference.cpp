@@ -147,6 +147,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "Error: dtype must be either 'float16' or 'float32'" << std::endl;
             return 1;
         }
+        torch_tensorrt::set_device(0);
         
         // Convert dtype string to torch dtype
         torch::Dtype dtype = (dtype_str == "float16") ? torch::kFloat16 : torch::kFloat32;
@@ -154,9 +155,8 @@ int main(int argc, char* argv[]) {
         // Load model
         std::cout << "Loading model from: " << model_path << std::endl;
         
-        // Load the model using torch_tensorrt
-        torch::jit::script::Module model = torch::jit::load(model_path);
-        // model = (model_path, torch::kCUDA);
+        // Load the model using torch::jit::load with CUDA support
+        torch::jit::script::Module model = torch::jit::load(model_path, torch::kCUDA);
         model.to(torch::kCUDA);
         model.to(dtype);
         model.eval();
