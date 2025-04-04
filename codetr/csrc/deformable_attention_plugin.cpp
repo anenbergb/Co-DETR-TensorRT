@@ -1,15 +1,12 @@
-#include "NvInfer.h"
-#include "NvInferPlugin.h"
-#include "cuda_runtime_api.h"
-#include <cassert>
+#include <NvInfer.h>
+#include <NvInferPlugin.h>
+#include <cuda_runtime_api.h>
 #include <cstring>
 #include <vector>
 #include <iostream>
-#include <memory>
 
-#include <ATen/ATen.h>
-#include <ATen/cuda/CUDAContext.h>
-#include <torch/extension.h>
+#include <cuda.h>
+#include <cuda_fp16.h>
 
 using namespace nvinfer1;
 
@@ -57,7 +54,7 @@ public:
 
         auto bs = inputs[0].d[0];
         auto num_queries = inputs[3].d[1];
-        auto embed_dims = exprBuilder.operation(DimensionOperation::kPROD, {inputs[0].d[2], inputs[0].d[3]});
+        auto embed_dims = exprBuilder.operation(DimensionOperation::kPROD, *inputs[0].d[2], *inputs[0].d[3]);
 
         DimsExprs out;
         out.nbDims = 3;
@@ -121,14 +118,14 @@ public:
                 num_levels, num_points, im2col_step, stream);
 
         } else if (dtype == DataType::kHALF) {
-            const __half* value_ptr = static_cast<const __half*>(inputs[0]);
+            const half* value_ptr = static_cast<const half*>(inputs[0]);
             const int64_t* spatial_shapes_ptr = static_cast<const int64_t*>(inputs[1]);
             const int64_t* level_start_index_ptr = static_cast<const int64_t*>(inputs[2]);
-            const __half* sampling_loc_ptr = static_cast<const __half*>(inputs[3]);
-            const __half* attn_weight_ptr = static_cast<const __half*>(inputs[4]);
-            __half* output_ptr = static_cast<__half*>(outputs[0]);
+            const half* sampling_loc_ptr = static_cast<const half*>(inputs[3]);
+            const half* attn_weight_ptr = static_cast<const half*>(inputs[4]);
+            half* output_ptr = static_cast<half*>(outputs[0]);
 
-            multi_scale_deformable_attention_cuda_forward<__half>(
+            multi_scale_deformable_attention_cuda_forward<half>(
                 value_ptr, spatial_shapes_ptr, level_start_index_ptr,
                 sampling_loc_ptr, attn_weight_ptr, output_ptr,
                 bs, num_keys, num_queries, num_heads, dim_per_head,
@@ -163,14 +160,6 @@ public:
     int initialize() noexcept override { return 0; }
 
     void terminate() noexcept override {}
-
-    bool isOutputBroadcastAcrossBatch(int outputIndex, const bool* inputIsBroadcasted, int nbInputs) const noexcept override {
-        return false;
-    }
-
-    bool canBroadcastInputAcrossBatch(int inputIndex) const noexcept override {
-        return false;
-    }
 
 private:
     int im2col_step;

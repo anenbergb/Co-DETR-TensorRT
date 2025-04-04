@@ -1,6 +1,5 @@
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
-#include <torch/extension.h>
 #include <c10/util/TypeCast.h>
 
 extern at::Tensor ms_deform_attn_forward(
