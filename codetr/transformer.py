@@ -350,7 +350,11 @@ def apply_mask_to_proposal_and_memory(output_proposals, memory, memory_padding_m
     """
     # log(0.1 / (1 - 0.1)) = -4.6
     # log(0.99 / (1 - 0.99)) = 4.6
-    output_proposals_valid = ((output_proposals > -4.6) & (output_proposals < 4.6)).all(-1, keepdim=True)
+
+    # This is a workaround to make the operator exportable to TensorRT
+    # output_proposals_valid = ((output_proposals > -4.6) & (output_proposals < 4.6)).all(-1, keepdim=True)
+    output_proposals_valid = ((output_proposals > -4.6) & (output_proposals < 4.6)).min(dim=-1, keepdim=True)[0]
+
     output_proposals = output_proposals.masked_fill(memory_padding_mask.unsqueeze(-1), float("inf"))
     output_proposals = output_proposals.masked_fill(~output_proposals_valid, float("inf"))
 

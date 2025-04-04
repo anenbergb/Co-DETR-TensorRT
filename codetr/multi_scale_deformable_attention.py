@@ -171,7 +171,8 @@ class MultiScaleDeformableAttention(BaseModule):
 
         bs, num_query, _ = query.shape
         bs, num_value, _ = value.shape
-        assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
+        # skip the assertion to avoid graph breaks when exporting to TensorRT
+        # assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
 
         value = self.value_proj(value)
         if key_padding_mask is not None:
