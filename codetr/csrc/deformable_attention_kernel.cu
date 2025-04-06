@@ -8,7 +8,7 @@ extern at::Tensor ms_deform_attn_forward(
     const at::Tensor& level_start_index,
     const at::Tensor& sampling_loc,
     const at::Tensor& attn_weight,
-    const int im2col_step);
+    const int64_t im2col_step);
 
 template <typename scalar_t>
 void multi_scale_deformable_attention_cuda_forward(
@@ -25,7 +25,7 @@ void multi_scale_deformable_attention_cuda_forward(
     int dim_per_head,
     int num_levels,
     int num_points,
-    int im2col_step,
+    int64_t im2col_step,
     cudaStream_t stream)
 {
     // This should resolve float -> at::kFloat, and __half -> at::kHalf
