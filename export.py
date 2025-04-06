@@ -83,6 +83,12 @@ def parse_args():
         default=0.5,
         help="IoU threshold used in non-maximum suppression for suppressing false positive detections",
     )
+    parser.add_argument(
+        "--plugin-lib",
+        type=str,
+        default=os.path.join(PROJECT_ROOT, "codetr/csrc/build/libdeformable_attention_plugin.so"),
+        help="Path to the plugin library",
+    )
     return parser.parse_args()
 
 
@@ -213,16 +219,40 @@ class Visualizer:
         vis = self.visualizer.get_image()
         return vis
 
+import tensorrt as trt
+import ctypes
+TRT_LOGGER = trt.Logger(trt.Logger.INFO)
+
+def load_plugin_lib(plugin_lib_file_path):
+
+    if os.path.isfile(plugin_lib_file_path):
+        try:
+            # Python specifies that winmode is 0 by default, but some implementations
+            # incorrectly default to None instead. See:
+            # https://docs.python.org/3.8/library/ctypes.html
+            # https://github.com/python/cpython/blob/3.10/Lib/ctypes/__init__.py#L343
+            ctypes.CDLL(plugin_lib_file_path, winmode=0)
+        except TypeError:
+            # winmode only introduced in python 3.8
+            ctypes.CDLL(plugin_lib_file_path)
+        return
+
+    raise IOError(f"Failed to load plugin library: {plugin_lib_file_path}")
 
 def main():
     args = parse_args()
 
-    # Convert dtype string to torch dtype
-    dtype = torch.float32 if args.dtype == "float32" else torch.float16
+    trt.init_libnvinfer_plugins(None, "")
+    load_plugin_lib(args.plugin_lib)
+    registry = trt.get_plugin_registry()
+    plugin_creator = registry.get_creator("DeformableAttentionPlugin", "1", "")
+    assert plugin_creator is not None, "Failed to get plugin creator for DeformableAttentionPlugin"
 
     # Disable TensorRT safe mode to avoid warnings
     torch_tensorrt.runtime.set_multi_device_safe_mode(False)
 
+    # Convert dtype string to torch dtype
+    dtype = torch.float32 if args.dtype == "float32" else torch.float16
     device = "cuda:0"
     print(f"Loading model from {args.model}")
     if args.weights:
@@ -254,11 +284,13 @@ def main():
     print(f"Exporting model with precision={args.dtype}, optimization_level={args.optimization_level}")
     os.makedirs(args.output, exist_ok=True)
     with torch.inference_mode():
-
         def run_pytorch_model():
             return model(batch_inputs, img_masks)
-
         output_pytorch = run_pytorch_model()
+
+        model_compiled = torch_tensorrt.compile(model,inputs=(batch_inputs, img_masks),dryrun=True,min_block_size=1,enabled_precisions=(dtype,))
+        import ipdb; ipdb.set_trace()
+
         vis = visualizer(*output_pytorch)
         vis_path = os.path.join(args.output, "pytorch_output.jpg")
         mmcv.imwrite(mmcv.rgb2bgr(vis), vis_path)
@@ -285,6 +317,8 @@ def main():
             engine_cache_dir = os.path.join(args.output, "engine_cache"),
         )
         print(f"✅ Model compiled to TensorRT at optimization level: {args.optimization_level}")
+        model_type = torch_tensorrt._compile._parse_module_type(model_trt)
+        print(f"TensorRT model type: {type(model_trt)}\t {model_type}")
 
         def run_tensorrt_model():
             return model_trt(batch_inputs, img_masks)
@@ -306,10 +340,21 @@ def main():
         benchmark_runtime(run_pytorch_model, run_tensorrt_model, iterations=args.iterations)
         torch.cuda.empty_cache()
         save_model(os.path.join(args.output, "codetr.ts"), model_trt, (batch_inputs, img_masks))
+        import ipdb; ipdb.set_trace()
         print_tensorrt_model(model_trt, os.path.join(args.output, "tensorrt_model.txt"))
 
 
 def save_model(save_path, model, inputs):
+    """
+    for 'torchscript' output format, this should be equivalent to
+    
+    If the model is torch.fx.GraphModule, then first it will be retraced then saved
+    model_ts = torch.jit.trace(model_trt, inputs)
+    torch.jit.save(model_ts, save_path)
+
+    If the model is a torch.jit.TopLevelTracedModule (torchscript), then it will be saved directly.
+    torch.jit.save(model, save_path)
+    """
     output_format = "exported_program" if save_path.endswith(".ep") else "torchscript"
     print(f"Saving TensorRT model to {save_path}")
     torch_tensorrt.save(model, save_path, inputs=inputs, output_format=output_format)

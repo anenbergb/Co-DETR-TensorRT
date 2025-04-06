@@ -151,3 +151,139 @@ def multi_scale_deformable_attention_pytorch(
         .view(bs, num_heads * embed_dims, num_queries)
     )
     return output.transpose(1, 2).contiguous()
+
+
+# from torch_tensorrt.dynamo import tensorrt_converter
+# import torch_tensorrt.fx.tracer.acc_tracer.acc_ops as acc_ops
+
+# @tensorrt_converter(torch.ops.codetr.multi_scale_deformable_attention.default)
+# def convert_multi_scale_deformable_attention(ctx, target, args, kwargs):
+#     value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2col_step = args
+
+#     plugin_fields = [
+#         trt.PluginField("im2col_step", np.array([im2col_step], dtype=np.int32))
+#     ]
+#     plugin_creator = trt.get_plugin_registry().get_plugin_creator("DeformableAttentionPlugin", "1", "")
+#     plugin = plugin_creator.create_plugin("deform_attn_plugin", trt.PluginFieldCollection(plugin_fields))
+
+#     layer = ctx.network.add_plugin_v2(inputs=[
+#         ctx.get_trt_tensor(value),
+#         ctx.get_trt_tensor(spatial_shapes),
+#         ctx.get_trt_tensor(level_start_index),
+#         ctx.get_trt_tensor(sampling_loc),
+#         ctx.get_trt_tensor(attn_weight),
+#     ], plugin=plugin)
+
+#     ctx.output_spec = (layer.get_output(0),)
+#     return layer.get_output(0)
+
+# file: deformable_attention_converter.py
+
+import torch
+import numpy as np
+import tensorrt as trt
+from typing import Tuple, Dict, Union, Sequence
+
+
+import torch_tensorrt
+from torch_tensorrt.dynamo.conversion.converter_utils import (
+    get_trt_tensor,  # helper to map a torch.Tensor or Python scalar to a TRT ITensor
+    get_arg,         # helper to read function args
+)
+from torch.fx.node import Argument, Target
+
+
+
+@torch_tensorrt.dynamo.conversion.dynamo_tensorrt_converter(
+    torch.ops.codetr.multi_scale_deformable_attention.default
+)
+def multi_scale_deformable_attention_converter(
+    ctx: torch_tensorrt.dynamo.conversion.ConversionCtx,
+    target: Target,
+    args: Tuple[Argument, ...],
+    kwargs: Dict[str, Argument],
+    name: str,
+) -> Union[trt.ITensor, Sequence[trt.ITensor]]:
+    """
+    Dynamically convert the codetr::multi_scale_deformable_attention custom op to a
+    TensorRT DeformableAttentionPlugin node in the TRT graph.
+
+    Arguments:
+        ctx : The current state of the compiler.
+            Converters primarily will manipulate ctx.net which is the
+            tensorrt.INetworkDefinition being constructed. 
+        target: Target key in the call_module or call_function above.
+            eg:torch.ops.codetr.multi_scale_deformable_attention.default.
+        args: The arguments being passed to a particular Node 
+            (as collected by the torch_tensorrt.dynamo.conversion.TRTInterpreter).
+            These arguments along with the kwargs are to be used to construct
+             a specific TensorRT subgraph representing the current node in the INetworkDefinition.
+        kwargs: The arguments being passed to a particular Node 
+            (as collected by the torch_tensorrt.dynamo.conversion.TRTInterpreter).
+        name: String containing the name of the target
+
+    args come from:
+      codetr.multi_scale_deformable_attention(
+         value,                # args[0]
+         spatial_shapes,       # args[1]
+         level_start_index,    # args[2]
+         sampling_loc,         # args[3]
+         attn_weight,          # args[4]
+         im2col_step           # args[5]
+      )
+
+
+    ctx.net is tensorrt.INetworkDefinition
+
+    
+    https://github.com/leimao/TensorRT-Custom-Plugin-Example/blob/main/python/test_plugin.py
+    """
+
+    # 1) Extract the 5 Tensor inputs (value, spatial_shapes, etc.) as TRT ITensors
+    trt_value = get_trt_tensor(ctx, args[0], 0)
+    trt_spatial_shapes = get_trt_tensor(ctx, args[1], 1)
+    trt_level_start_index = get_trt_tensor(ctx, args[2], 2)
+    trt_sampling_loc = get_trt_tensor(ctx, args[3], 3)
+    trt_attn_weight = get_trt_tensor(ctx, args[4], 4)
+
+    # 2) Extract the integer im2col_step
+    im2col_step = get_arg(ctx, args, kwargs, 5, "im2col_step")
+    if im2col_step is None:
+        # Fallback or default if not provided
+        im2col_step = 64
+
+    # 3) Build the plugin fields. We only need "im2col_step" as INT64.
+    plugin_fields = []
+    field_im2col_step = trt.PluginField(
+        "im2col_step",
+        np.array([im2col_step], dtype=np.int64),  # must be np.int64
+        trt.PluginFieldType.INT64,
+    )
+    plugin_fields.append(field_im2col_step)
+
+    # 4) Create the plugin from the registry
+    plugin_creator = trt.get_plugin_registry().get_plugin_creator(
+        "DeformableAttentionPlugin",  # Plugin name
+        "1",                          # Plugin version
+        ""                            # Plugin namespace
+    )
+    pfc = trt.PluginFieldCollection(plugin_fields)
+    plugin = plugin_creator.create_plugin(name="DeformableAttentionPlugin", field_collection=pfc)
+    if not plugin:
+        raise RuntimeError("Could not create DeformableAttentionPlugin. Make sure the plugin library is loaded.")
+
+    # 5) Add the plugin layer to the network with the five input tensors
+    layer_inputs = [
+        trt_value,
+        trt_spatial_shapes,
+        trt_level_start_index,
+        trt_sampling_loc,
+        trt_attn_weight,
+    ]
+    plugin_layer = network.add_plugin_v3(layer_inputs, plugin)
+    if not plugin_layer:
+        raise RuntimeError("Failed to create plugin layer for DeformableAttentionPlugin.")
+
+    # 6) The plugin has exactly one output
+    trt_output = plugin_layer.get_output(0)
+    return trt_output
