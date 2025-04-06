@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <mutex>
 
 // For half precision
 #include <cuda_fp16.h>
@@ -562,3 +563,59 @@ REGISTER_TENSORRT_PLUGIN(DeformableAttentionPluginCreator);
 
 } // namespace plugin
 } // namespace nvinfer1
+
+
+class ThreadSafeLoggerFinder
+{
+public:
+    ThreadSafeLoggerFinder() = default;
+
+    // Set the logger finder.
+    void setLoggerFinder(nvinfer1::ILoggerFinder* finder)
+    {
+        std::lock_guard<std::mutex> lk(mMutex);
+        if (mLoggerFinder == nullptr && finder != nullptr)
+        {
+            mLoggerFinder = finder;
+        }
+    }
+
+    // Get the logger.
+    nvinfer1::ILogger* getLogger() noexcept
+    {
+        std::lock_guard<std::mutex> lk(mMutex);
+        if (mLoggerFinder != nullptr)
+        {
+            return mLoggerFinder->findLogger();
+        }
+        return nullptr;
+    }
+
+private:
+    nvinfer1::ILoggerFinder* mLoggerFinder{nullptr};
+    std::mutex mMutex;
+};
+
+ThreadSafeLoggerFinder gLoggerFinder;
+
+// Not exposing this function to the user to get the plugin logger for the
+// moment. Can switch the plugin logger to this in the future.
+
+// ILogger* getPluginLogger()
+// {
+//     return gLoggerFinder.getLogger();
+// }
+
+extern "C" void setLoggerFinder(nvinfer1::ILoggerFinder* finder)
+{
+    gLoggerFinder.setLoggerFinder(finder);
+}
+
+extern "C" nvinfer1::IPluginCreatorInterface* const*
+getPluginCreators(int32_t& nbCreators)
+{
+    nbCreators = 1;
+    static nvinfer1::plugin::DeformableAttentionPluginCreator creator{};
+    static nvinfer1::IPluginCreatorInterface* const pluginCreatorList[] = {&creator};
+    return pluginCreatorList;
+}
