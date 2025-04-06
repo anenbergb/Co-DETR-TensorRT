@@ -458,74 +458,103 @@ private:
 // ---------------------------------------------------------------------------
 // DeformableAttentionPluginCreator
 // ---------------------------------------------------------------------------
-class DeformableAttentionPluginCreator : public IPluginCreator
+class DeformableAttentionPluginCreator : public IPluginCreatorV3One
 {
 public:
     DeformableAttentionPluginCreator()
     {
-        mPluginAttributes.emplace_back(
-            PluginField{"im2col_step", nullptr, PluginFieldType::kINT32, 1}
-        );
+        mPluginAttributes.clear();
+        mPluginAttributes.emplace_back(nvinfer1::PluginField(
+            "im2col_step", nullptr, PluginFieldType::kINT64, 1));
         mFC.nbFields = mPluginAttributes.size();
         mFC.fields   = mPluginAttributes.data();
-        mNamespace   = "";
     }
 
     ~DeformableAttentionPluginCreator() override = default;
 
-    const char* getPluginName() const noexcept override
+    nvinfer1::PluginFieldCollection const* getFieldNames() noexcept override
     {
-        // Must match plugin getPluginType()
-        return "DeformableAttentionPlugin";
-    }
-
-    const char* getPluginVersion() const noexcept override
-    {
-        return "1";
-    }
-
-    const PluginFieldCollection* getFieldNames() noexcept override
-    {
+        // This is only used in the build phase.
         return &mFC;
     }
 
-    // createPlugin() is called when user code calls create
-    // does some serialization here.
-
-    IPluginV3* createPlugin(const char* /*name*/, const PluginFieldCollection* fc) noexcept override
+    IPluginV3* createPlugin(
+        char const* name,
+        PluginFieldCollection const* fc,
+        TensorRTPhase phase) noexcept override
     {
-        int im2col_step = 64; // default
-        for (int i = 0; i < fc->nbFields; ++i)
+        // The build phase and the deserialization phase are handled differently.
+        if (phase == TensorRTPhase::kBUILD)
         {
-            const auto& f = fc->fields[i];
-            if (strcmp(f.name, "im2col_step") == 0 && f.type == PluginFieldType::kINT32)
+            try {
+                int64_t im2col_step = 64; // default
+                for (int i = 0; i < fc->nbFields; ++i)
+                {
+                    const auto& f = fc->fields[i];
+                    if (strcmp(f.name, "im2col_step") == 0 && f.type == PluginFieldType::kINT64)
+                    {
+                        im2col_step = *static_cast<const int64_t*>(f.data);
+                    }
+                }
+                DeformableAttentionParameters const params{.im2col_step = im2col_step};
+                DeformableAttentionPlugin* const plugin{new DeformableAttentionPlugin{params}};
+                return plugin;
+            }
+            catch (std::exception const& e)
             {
-                im2col_step = *static_cast<const int*>(f.data);
+                caughtError(e);
+            }
+            return nullptr;
+        }
+        else if (phase == TensorRTPhase::kRUNTIME)
+        {
+            // The attributes from the serialized plugin will be passed via fc.
+            try {
+                
+                nvinfer1::PluginField const* fields{fc->fields};
+                int32_t nbFields{fc->nbFields};
+                PLUGIN_VALIDATE(nbFields == 1);
+    
+                char const* attrName = fields[0].name;
+                PLUGIN_VALIDATE(!strcmp(attrName, "parameters"));
+                PLUGIN_VALIDATE(fields[0].type ==
+                                nvinfer1::PluginFieldType::kUNKNOWN);
+                PLUGIN_VALIDATE(fields[0].length == sizeof(DeformableAttentionParameters));
+                DeformableAttentionParameters params{
+                    *(static_cast<DeformableAttentionParameters const*>(fields[0].data))};
+    
+                DeformableAttentionPlugin* const plugin{new DeformableAttentionPlugin{params}};
+                return plugin;
+            }
+            catch (std::exception const& e)
+            {
+                caughtError(e);
             }
         }
-        return new DeformableAttentionPlugin(im2col_step);
+        else
+        {
+            return nullptr;
+        }
     }
 
-    // deserializePlugin() is called when TRT loads an engine
-    IPluginV3* deserializePlugin(const char* /*name*/, const void* serialData, size_t serialLength) noexcept override
+    char const* getPluginNamespace() const noexcept override
     {
-        return new DeformableAttentionPlugin(serialData, serialLength);
+        return kDEFORM_ATTN_PLUGIN_NAMESPACE;
     }
 
-    void setPluginNamespace(const char* pluginNamespace) noexcept override
+    char const* getPluginName() const noexcept override
     {
-        mNamespace = pluginNamespace ? pluginNamespace : "";
+        return kDEFORM_ATTN_PLUGIN_NAME;
     }
 
-    const char* getPluginNamespace() const noexcept override
+    char const* getPluginVersion() const noexcept override
     {
-        return mNamespace.c_str();
+        return kDEFORM_ATTN_PLUGIN_VERSION;
     }
 
 private:
-    std::string mNamespace;
-    PluginFieldCollection mFC{};
-    std::vector<PluginField> mPluginAttributes;
+    nvinfer1::PluginFieldCollection mFC;
+    std::vector<nvinfer1::PluginField> mPluginAttributes;
 };
 
 // Register the plugin with TensorRT's global registry so it can be discovered
