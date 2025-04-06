@@ -497,7 +497,7 @@ public:
                         im2col_step = *static_cast<const int64_t*>(f.data);
                     }
                 }
-                DeformableAttentionParameters const params{.im2col_step = im2col_step};
+                DeformableAttentionParameters const params{im2col_step};
                 DeformableAttentionPlugin* const plugin{new DeformableAttentionPlugin{params}};
                 return plugin;
             }
@@ -531,11 +531,13 @@ public:
             {
                 caughtError(e);
             }
+            return nullptr;
         }
         else
         {
             return nullptr;
         }
+        return nullptr;
     }
 
     char const* getPluginNamespace() const noexcept override
