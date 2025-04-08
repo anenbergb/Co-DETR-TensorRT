@@ -7,7 +7,7 @@ import numpy as np
 from common import EXPLICIT_BATCH, allocate_buffers, do_inference, free_buffers
 from common_runtime import load_plugin_lib
 
-TRT_LOGGER = trt.Logger(trt.Logger.INFO)
+TRT_LOGGER = trt.Logger(trt.Logger.VERBOSE)
 
 
 PLUGIN_NAME = "DeformableAttentionPlugin"

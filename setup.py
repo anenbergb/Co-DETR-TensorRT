@@ -14,6 +14,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         "torch"
+        "torch-tensorrt"
     ],
     extras_require={
         "notebook": [

@@ -10,9 +10,14 @@
 #include <vector>
 #include <iostream>
 #include <mutex>
+#include <stdexcept>
 
 // For half precision
 #include <cuda_fp16.h>
+
+#include <ATen/ATen.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/util/TypeCast.h>
 
 // Helper methods
 
@@ -56,25 +61,27 @@ void reportValidation(bool success, char const* msg, char const* file,
     }
 }
 
+at::ScalarType getATenDtype(nvinfer1::DataType dtype) {
+    switch (dtype) {
+        case nvinfer1::DataType::kFLOAT:
+            return at::kFloat;
+        case nvinfer1::DataType::kHALF:
+            return at::kHalf;
+        default:
+            throw std::runtime_error("Unsupported TensorRT data type");
+    }
+}
 
-// If your custom CUDA code is in a separate .cu file, forward declare it here:
-template <typename scalar_t>
-void multi_scale_deformable_attention_cuda_forward(
-    const scalar_t* value_ptr,
-    const int64_t* spatial_shapes_ptr,
-    const int64_t* level_start_index_ptr,
-    const scalar_t* sampling_loc_ptr,
-    const scalar_t* attn_weight_ptr,
-    scalar_t* output_ptr,
-    int bs,
-    int num_keys,
-    int num_queries,
-    int num_heads,
-    int dim_per_head,
-    int num_levels,
-    int num_points,
-    int im2col_step,
-    cudaStream_t stream);
+namespace codetr {
+extern at::Tensor ms_deform_attn_forward(
+    const at::Tensor& value,
+    const at::Tensor& spatial_shapes,
+    const at::Tensor& level_start_index,
+    const at::Tensor& sampling_loc,
+    const at::Tensor& attn_weight,
+    const int64_t im2col_step);
+}
+
 
 // ---------------------------------------------------------------------------
 // DeformableAttentionPlugin
@@ -327,6 +334,11 @@ public:
         void* workspace,
         cudaStream_t stream) noexcept override
     {
+        // void const* const* inputs: A pointer to a constant pointer to constant untyped data
+        //   - array of input pointers where each element is a pointer to some input data
+        //   - Neither the array elements (the pointers) nor the data they point to can be modified through this parameter
+        //   - he parameter itself can be redirected to a different array
+
         // We parse shapes from the stored dims
         // [0] -> (bs, num_keys, num_heads, dim_per_head)
         // [3] -> (bs, num_queries, num_heads, num_levels, num_points, 2)
@@ -344,62 +356,59 @@ public:
 
         DataType dtype = inputDesc[0].type;
 
-        if (dtype == DataType::kFLOAT) {
-            const float* value_ptr             = static_cast<const float*>(inputs[0]);
-            const int64_t* spatial_shapes_ptr  = static_cast<const int64_t*>(inputs[1]);
-            const int64_t* level_start_index_ptr = static_cast<const int64_t*>(inputs[2]);
-            const float* sampling_loc_ptr      = static_cast<const float*>(inputs[3]);
-            const float* attn_weight_ptr       = static_cast<const float*>(inputs[4]);
-            float* output_ptr                  = static_cast<float*>(outputs[0]);
-
-            multi_scale_deformable_attention_cuda_forward<float>(
-                value_ptr,
-                spatial_shapes_ptr,
-                level_start_index_ptr,
-                sampling_loc_ptr,
-                attn_weight_ptr,
-                output_ptr,
-                bs,
-                num_keys,
-                num_queries,
-                num_heads,
-                dim_per_head,
-                num_levels,
-                num_points,
-                mParams.im2col_step,
-                stream
-            );
+        at::ScalarType scalar_type;
+        try {
+            scalar_type = getATenDtype(dtype);
         }
-        else if (dtype == DataType::kHALF)
-        {
-            const half* value_ptr            = static_cast<const half*>(inputs[0]);
-            const int64_t* spatial_shapes_ptr  = static_cast<const int64_t*>(inputs[1]);
-            const int64_t* level_start_index_ptr = static_cast<const int64_t*>(inputs[2]);
-            const half* sampling_loc_ptr     = static_cast<const half*>(inputs[3]);
-            const half* attn_weight_ptr      = static_cast<const half*>(inputs[4]);
-            half* output_ptr                 = static_cast<half*>(outputs[0]);
+        catch (const std::runtime_error& e) {
+            std::cerr << "Error: " << e.what() << std::endl;
+            return 1;
+        }        
+        auto options = at::TensorOptions().dtype(scalar_type).device(at::kCUDA);
+        auto options_long = at::TensorOptions().dtype(at::kLong).device(at::kCUDA);
 
-            multi_scale_deformable_attention_cuda_forward<half>(
-                value_ptr,
-                spatial_shapes_ptr,
-                level_start_index_ptr,
-                sampling_loc_ptr,
-                attn_weight_ptr,
-                output_ptr,
-                bs,
-                num_keys,
-                num_queries,
-                num_heads,
-                dim_per_head,
-                num_levels,
-                num_points,
-                mParams.im2col_step,
-                stream
-            );
-        }
-        else
-        {
-            std::cerr << "[DeformableAttentionPlugin] Unsupported dtype.\n";
+        // We're telling PyTorch to use externally-managed memory provied by TensorRT 
+        at::Tensor value = at::from_blob(
+            const_cast<void*>(inputs[0]),
+            {bs, num_keys, num_heads, dim_per_head},
+            options);
+    
+        // reinterpret_cast<int64_t*>
+        at::Tensor spatial_shapes = at::from_blob(
+            const_cast<void*>(inputs[1]),
+            {num_levels, 2},
+            options_long);
+    
+        // reinterpret_cast<int64_t*>
+        at::Tensor level_start_index = at::from_blob(
+            const_cast<void*>(inputs[2]),
+            {num_levels},
+            options_long);
+    
+        at::Tensor sampling_loc = at::from_blob(
+            const_cast<void*>(inputs[3]),
+            {bs, num_queries, num_heads, num_levels, num_points, 2},
+            options);
+    
+        at::Tensor attn_weight = at::from_blob(
+            const_cast<void*>(inputs[4]),
+            {bs, num_queries, num_heads, num_levels, num_points},
+            options);
+    
+        at::Tensor output = codetr::ms_deform_attn_forward(
+            value, spatial_shapes, level_start_index,
+            sampling_loc, attn_weight, mParams.im2col_step);
+        
+        // This memcpy from output to output_ptr can be removed if you pre-allocate the output using from_blob and pass it into ms_deform_attn_forward.
+
+        if (scalar_type == at::kFloat) {
+            std::memcpy(outputs[0], output.data_ptr<float>(), output.numel() * sizeof(float));
+        } 
+        else if (scalar_type == at::kHalf) {
+            std::memcpy(outputs[0], output.data_ptr<at::Half>(), output.numel() * sizeof(at::Half));
+        } 
+        else {
+            std::cerr << "Unsupported scalar type" << std::endl;
             return 1;
         }
 
@@ -620,4 +629,4 @@ getPluginCreators(int32_t& nbCreators)
     static nvinfer1::plugin::DeformableAttentionPluginCreator creator{};
     static nvinfer1::IPluginCreatorInterface* const pluginCreatorList[] = {&creator};
     return pluginCreatorList;
-}
+}   

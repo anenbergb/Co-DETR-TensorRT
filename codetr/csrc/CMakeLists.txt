@@ -17,9 +17,10 @@ find_package(Torch REQUIRED)
 
 add_library(deformable_attention_plugin SHARED
     deformable_attention_plugin.cpp
-    deformable_attention_kernel.cu
     ms_deform_attn.cu
 )
+
+target_link_options(deformable_attention_plugin PRIVATE "LINKER:--no-as-needed")
 
 # Include paths
 target_include_directories(deformable_attention_plugin PRIVATE
@@ -33,6 +34,7 @@ target_link_libraries(deformable_attention_plugin
     cudart
 )
 
+target_link_options(deformable_attention_plugin PRIVATE "LINKER:--as-needed")
 
 # CUDA Architectures (e.g. for Ada/Hopper GPUs, sm_89)
 if (CMAKE_CUDA_COMPILER_ID STREQUAL "NVIDIA")
