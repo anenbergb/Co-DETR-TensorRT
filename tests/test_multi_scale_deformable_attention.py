@@ -550,6 +550,7 @@ def test_export_and_benchmark(dtype):
     value = torch.rand(spatial_len, bs, embed_dims, device=device, dtype=dtype)
 
     with torch.inference_mode():
+
         def run_pytorch_model():
             return msda(
                 query,
@@ -558,9 +559,8 @@ def test_export_and_benchmark(dtype):
                 spatial_shapes=spatial_shapes,
                 level_start_index=level_start_index,
             )
-    
-        run_pytorch_model()
 
+        # dry-run just to print the graph structure and validate that it's a single TRTEngine
         torch_tensorrt.compile(
             msda,
             arg_inputs=(query,),
@@ -598,7 +598,7 @@ def test_export_and_benchmark(dtype):
                 level_start_index=level_start_index,
             )
 
-        # Compile with TensorRT
+        # Compile with TensorRT -> torch.fx.GraphModule
         msda_trt = torch_tensorrt.dynamo.compile(
             msda_export,
             arg_inputs=(query,),
@@ -609,6 +609,11 @@ def test_export_and_benchmark(dtype):
                 "level_start_index": level_start_index,
             },
             enabled_precisions=(dtype,),
+            optimization_level=3,
+            truncate_double=True,
+            require_full_compilation=True,
+            cache_built_engines=False,
+            reuse_cached_engines=False,
         )
         print(f"✅ Compiled {type(msda_export)} to TensorRT with dtype={dtype}")
 

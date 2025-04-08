@@ -248,22 +248,27 @@ public:
     PLUGIN_ASSERT(nbInputs == 5 && nbOutputs == 1 &&
                   pos < nbInputs + nbOutputs);
 
-    bool isValidCombination = false;
 
-    // Just check the type of the first input tensor
-    const auto type = inOut[0].desc.type;
-    const auto format = inOut[0].desc.format;
-    isValidCombination =
-        (type == DataType::kFLOAT || type == DataType::kHALF) &&
-        format == TensorFormat::kLINEAR;
+    // 0: value             float
+    // 1: spatial_shapes    int64
+    // 2: level_start_index int64
+    // 3: sampling_loc      float
+    // 4: attn_weight       float
+    // 5: output           float
 
-    // TODO check the types of the other inputs
+    const auto first_type = inOut[0].desc.type;
 
-    // Make sure the input tensor and output tensor types and formats are same.
-    isValidCombination &=
-        (pos < nbInputs || (inOut[pos].desc.format == inOut[0].desc.format &&
-                            inOut[pos].desc.type == inOut[0].desc.type));
+    const auto type = inOut[pos].desc.type;
+    const auto format = inOut[pos].desc.format;
 
+    bool isValidCombination = format == TensorFormat::kLINEAR;
+
+    if (pos == 0 || pos == 3 || pos == 4 || pos == 5) {
+      isValidCombination &= (type == DataType::kFLOAT || type == DataType::kHALF);
+      isValidCombination &= type == first_type;
+    } else if (pos == 1 || pos == 2) {
+      isValidCombination &=  type == DataType::kINT64;
+    }
     return isValidCombination;
   }
 

@@ -89,6 +89,8 @@ def test_swin_transformer(dtype):
             inputs=(batch_inputs,),
             enabled_precisions=(dtype,),
             optimization_level=optimization_level,
+            truncate_double=True,
+            require_full_compilation=True,
         )
         print(f"✅ Compiled {type(model_export)} to TensorRT with dtype={dtype}")
 
@@ -160,6 +162,8 @@ def test_neck(dtype):
             inputs=(batch_inputs,),
             enabled_precisions=(dtype,),
             optimization_level=optimization_level,
+            truncate_double=True,
+            require_full_compilation=True,
         )
         print(f"✅ Compiled {type(model_export)} to TensorRT with dtype={dtype}")
 
@@ -315,6 +319,8 @@ def test_transformer_encoder(dtype):
             },
             enabled_precisions=(dtype,),
             optimization_level=optimization_level,
+            truncate_double=True,
+            require_full_compilation=True,
         )
         print(f"✅ Compiled {type(model_export)} to TensorRT with dtype={dtype}")
 
@@ -485,6 +491,8 @@ def test_transformer_decoder(dtype):
             },
             enabled_precisions=(dtype,),
             optimization_level=optimization_level,
+            truncate_double=True,
+            require_full_compilation=True,
         )
         print(f"✅ Compiled {type(model_export)} to TensorRT with dtype={dtype}")
 
@@ -614,6 +622,8 @@ def test_transformer(dtype):
             ),
             enabled_precisions=(dtype,),
             optimization_level=optimization_level,
+            truncate_double=True,
+            require_full_compilation=True,
         )
         print(f"✅ Compiled {type(model_export)} to TensorRT with dtype={dtype}")
 
@@ -705,6 +715,8 @@ def test_query_head(dtype):
             inputs=(img_feats, img_masks),
             enabled_precisions=(dtype,),
             optimization_level=optimization_level,
+            truncate_double=True,
+            require_full_compilation=True,
         )
         print(f"✅ Compiled {type(model_export)} to TensorRT with dtype={dtype}")
 
@@ -760,6 +772,8 @@ def test_codetr(dtype):
             inputs=(batch_inputs, img_masks),
             enabled_precisions=(dtype,),
             optimization_level=optimization_level,
+            truncate_double=True,
+            require_full_compilation=True,
         )
         print(f"✅ Compiled {type(model_export)} to TensorRT with dtype={dtype}")
 

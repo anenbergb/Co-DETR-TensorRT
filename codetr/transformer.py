@@ -351,15 +351,22 @@ def apply_mask_to_proposal_and_memory(output_proposals, memory, memory_padding_m
     # log(0.1 / (1 - 0.1)) = -4.6
     # log(0.99 / (1 - 0.99)) = 4.6
 
-    # This is a workaround to make the operator exportable to TensorRT
-    # output_proposals_valid = ((output_proposals > -4.6) & (output_proposals < 4.6)).all(-1, keepdim=True)
-    output_proposals_valid = ((output_proposals > -4.6) & (output_proposals < 4.6)).min(dim=-1, keepdim=True)[0]
+    valid_min = -4.6
+    valid_max = 4.6
 
-    output_proposals = output_proposals.masked_fill(memory_padding_mask.unsqueeze(-1), float("inf"))
-    output_proposals = output_proposals.masked_fill(~output_proposals_valid, float("inf"))
+    # Instead of masking, compute a multiplicative mask
+    # 1.0 for valid, 0.0 for invalid
+    in_bounds = ((output_proposals > valid_min) & (output_proposals < valid_max)).to(output_proposals.dtype)
+    output_proposals_valid = torch.prod(in_bounds, dim=-1, keepdim=True)
 
-    output_memory = memory.masked_fill(memory_padding_mask.unsqueeze(-1), float(0))
-    output_memory = output_memory.masked_fill(~output_proposals_valid, float(0))
+    # memory_padding_mask: (bs, num_keys) -> (bs, num_keys, 1)
+    mask = (~memory_padding_mask).to(output_proposals.dtype).unsqueeze(-1)
+
+    # Combine both masks
+    total_mask = output_proposals_valid * mask
+
+    output_proposals = output_proposals * total_mask + (1.0 - total_mask) * torch.finfo(output_proposals.dtype).max
+    output_memory = memory * total_mask + (1.0 - total_mask) * 0.0
     return output_proposals, output_memory
 
 
