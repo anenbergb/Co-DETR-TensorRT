@@ -71,9 +71,17 @@ class HostDeviceMem:
     ):
         nbytes = size * dtype.itemsize
         host_mem = cuda_call(cudart.cudaMallocHost(nbytes))
-        pointer_type = ctypes.POINTER(np.ctypeslib.as_ctypes_type(dtype))
 
-        self._host = np.ctypeslib.as_array(ctypes.cast(host_mem, pointer_type), (size,))
+        # Special handling for float16 since it's not directly supported by ctypes
+        if dtype == np.float16:
+            # Use uint16 for the pointer type (same size as float16)
+            pointer_type = ctypes.POINTER(np.ctypeslib.as_ctypes_type(np.uint16))
+            # Create array with uint16, which will be interpreted as float16
+            self._host = np.ctypeslib.as_array(ctypes.cast(host_mem, pointer_type), (size,)).view(np.float16)
+        else:
+            pointer_type = ctypes.POINTER(np.ctypeslib.as_ctypes_type(dtype))
+            self._host = np.ctypeslib.as_array(ctypes.cast(host_mem, pointer_type), (size,))
+
         self._device = cuda_call(cudart.cudaMalloc(nbytes))
         self._nbytes = nbytes
         self._name = name
@@ -216,6 +224,7 @@ def _do_inference_base(inputs, outputs, stream, execute_async_func):
 # inputs and outputs are expected to be lists of HostDeviceMem objects.
 def do_inference(context, engine, bindings, inputs, outputs, stream):
 
+    # https://docs.nvidia.com/deeplearning/tensorrt/latest/_static/python-api/infer/Core/ExecutionContext.html#tensorrt.IExecutionContext.execute_async_v3
     def execute_async_func():
         context.execute_async_v3(stream_handle=stream)
 

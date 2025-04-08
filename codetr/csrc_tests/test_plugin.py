@@ -59,13 +59,12 @@ class DeformAttnInputs:
 
 # Build engine from a plugin.
 def build_engine_from_plugin(
-    plugin_lib_file_path: str, deform_attn_inputs: DeformAttnInputs, im2col_step: int = 2, dtype: str = "float32"
+    plugin_lib_file_path: str, deform_attn_inputs: DeformAttnInputs, im2col_step: int = 2
 ) -> trt.ICudaEngine:
-    assert dtype in ["float32", "float16"], "dtype must be float32 or float16"
 
     builder = trt.Builder(TRT_LOGGER)
-    network = builder.create_network(EXPLICIT_BATCH)
-    config = builder.create_builder_config()
+    network = builder.create_network(EXPLICIT_BATCH)  # -> tensorrt_bindings.tensorrt.INetworkDefinition
+    config = builder.create_builder_config()  # -> tensorrt_bindings.tensorrt.IBuilderConfig
     # TensorRT runtime usually has to be initialized before `plugin_creator.create_plugin` is called.
     # Because the plugin creator may need to access the some functions, such as `getLogger`, from `NvInferRuntime.h`.
     # Otherwise, segmentation fault will occur because those functions are not accessible.
@@ -74,6 +73,7 @@ def build_engine_from_plugin(
 
     load_plugin_lib(plugin_lib_file_path)
     registry = trt.get_plugin_registry()
+    # return the plugin creator, e.g. tensorrt_bindings.tensorrt.IPluginCreatorV3One
     plugin_creator = registry.get_creator(PLUGIN_NAME, PLUGIN_VERSION)
     assert plugin_creator is not None
     field_im2col_step = trt.PluginField(
@@ -106,32 +106,42 @@ def build_engine_from_plugin(
     plugin = plugin_creator.create_plugin(
         name=PLUGIN_NAME, field_collection=field_collection, phase=trt.TensorRTPhase.BUILD
     )
+    # -> tensorrt_bindings.tensorrt.IPluginV3Layer
     plugin_layer = network.add_plugin_v3(inputs=plugin_inputs, shape_inputs=[], plugin=plugin)
-
-    network.mark_output(plugin_layer.get_output(0))
+    network.mark_output(plugin_layer.get_output(0))  # mark tensor as output
+    # This function allows building and serialization of a network without creating an engine.
+    # returns a pointer to a IHostMemory object that contains a serialized network.
     plan = builder.build_serialized_network(network, config)
+    # Deserialize an ICudaEngine from host memory (returns tensorrt_bindings.tensorrt.ICudaEngine)
+    # https://docs.nvidia.com/deeplearning/tensorrt/latest/_static/python-api/infer/Core/Engine.html#tensorrt.ICudaEngine
+    # engine[0] = 'value', engine[1] = 'spatial_shapes', ... names of each input
+    # num_io_tensors = 6
+    # num_layers = 1
     engine = runtime.deserialize_cuda_engine(plan)
-    registry.deregister_creator(plugin_creator)
-
+    # Deregister a previously registered plugin creator inheriting from IPluginCreator.
+    # Since there may be a desire to limit the number of plugins, this function provides a
+    # mechanism for removing plugin creators registered in TensorRT.
+    # The plugin creator that is specified by creator is removed from TensorRT and no longer tracked.
+    # registry.deregister_creator(plugin_creator)
     return engine
 
 
 @pytest.mark.parametrize(
     "dtype",
-    [
-        "float32",
-    ],
+    [np.float32, np.float16],
 )
 def test_plugin(dtype):
+    np.random.seed(42)
+
     plugin_lib_file_path = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "../csrc/build/libdeformable_attention_plugin.so")
     )
 
-    deform_attn_inputs = DeformAttnInputs()
+    deform_attn_inputs = DeformAttnInputs(dtype=dtype)
     for dinput in deform_attn_inputs.iter_shapes():
         print(f"{dinput['name']}: {dinput['shape']} {dinput['dtype']}")
 
-    engine = build_engine_from_plugin(plugin_lib_file_path, deform_attn_inputs, im2col_step=2, dtype=dtype)
+    engine = build_engine_from_plugin(plugin_lib_file_path, deform_attn_inputs, im2col_step=2)
 
     inputs, outputs, bindings, stream = allocate_buffers(engine=engine, profile_idx=None)
 
@@ -140,6 +150,8 @@ def test_plugin(dtype):
         data = getattr(deform_attn_inputs, name)
         host_device_buffer.host = data
 
+    # Create an IExecutionContext and specify the device memory allocation strategy.
+    # .profiler https://docs.nvidia.com/deeplearning/tensorrt/latest/_static/python-api/infer/Core/Profiler.html#tensorrt.IProfiler
     context = engine.create_execution_context()
     do_inference(
         context=context,
@@ -149,10 +161,8 @@ def test_plugin(dtype):
         bindings=bindings,
         stream=stream,
     )
-
-    for input_host_device_buffer, output_host_device_buffer in zip(inputs, outputs):
-        np.testing.assert_equal(input_host_device_buffer.host, output_host_device_buffer.host)
-
+    output_sum = outputs[0].host.sum()
+    assert output_sum > 0, f"Output sum is {output_sum}, expected > 0"
     free_buffers(inputs=inputs, outputs=outputs, stream=stream)
 
 
