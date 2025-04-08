@@ -111,7 +111,6 @@ def build_engine_from_plugin(
     network.mark_output(plugin_layer.get_output(0))
     plan = builder.build_serialized_network(network, config)
     engine = runtime.deserialize_cuda_engine(plan)
-
     registry.deregister_creator(plugin_creator)
 
     return engine
@@ -129,6 +128,8 @@ def test_plugin(dtype):
     )
 
     deform_attn_inputs = DeformAttnInputs()
+    for dinput in deform_attn_inputs.iter_shapes():
+        print(f"{dinput['name']}: {dinput['shape']} {dinput['dtype']}")
 
     engine = build_engine_from_plugin(plugin_lib_file_path, deform_attn_inputs, im2col_step=2, dtype=dtype)
 

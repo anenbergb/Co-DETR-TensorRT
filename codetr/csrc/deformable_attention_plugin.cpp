@@ -17,6 +17,8 @@
 
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAStream.h>
 #include <c10/util/TypeCast.h>
 
 // Helper methods
@@ -27,6 +29,10 @@ void caughtError(std::exception const &e) {
 
 void logInfo(char const *msg) {
   getLogger()->log(nvinfer1::ILogger::Severity::kINFO, msg);
+}
+
+void logVerbose(char const *msg) {
+  getLogger()->log(nvinfer1::ILogger::Severity::kVERBOSE, msg);
 }
 
 #define PLUGIN_ASSERT(val) reportAssertion((val), #val, __FILE__, __LINE__)
@@ -67,12 +73,11 @@ at::ScalarType getATenDtype(nvinfer1::DataType dtype) {
 }
 
 namespace codetr {
-extern at::Tensor ms_deform_attn_forward(const at::Tensor &value,
-                                         const at::Tensor &spatial_shapes,
-                                         const at::Tensor &level_start_index,
-                                         const at::Tensor &sampling_loc,
-                                         const at::Tensor &attn_weight,
-                                         const int64_t im2col_step);
+extern void ms_deform_attn_forward_reference(
+    const at::Tensor &value, const at::Tensor &spatial_shapes,
+    const at::Tensor &level_start_index, const at::Tensor &sampling_loc,
+    const at::Tensor &attn_weight, at::Tensor &output,
+    const int64_t im2col_step);
 }
 
 // ---------------------------------------------------------------------------
@@ -193,8 +198,8 @@ public:
     // sampling_loc (bs, num_queries, num_heads, num_levels, num_points, 2)
     PLUGIN_ASSERT(in[3].desc.dims.nbDims == 6);
 
-    // attn_weight (bs, num_heads, num_queries, num_keys)
-    PLUGIN_ASSERT(in[4].desc.dims.nbDims == 4);
+    // attn_weight (bs, num_queries, num_heads, num_levels, num_points)
+    PLUGIN_ASSERT(in[4].desc.dims.nbDims == 5);
 
     // output (bs, num_queries, num_heads * dim_per_head)
     PLUGIN_ASSERT(out[0].desc.dims.nbDims == 3);
@@ -205,23 +210,30 @@ public:
     PLUGIN_ASSERT(bs == in[4].desc.dims.d[0]);
     PLUGIN_ASSERT(bs == out[0].desc.dims.d[0]);
 
-    // Check num_keys
-    auto num_keys = in[0].desc.dims.d[1];
-    PLUGIN_ASSERT(num_keys == in[4].desc.dims.d[3]);
-
     // Check num_queries
     auto num_queries = in[3].desc.dims.d[1];
+    PLUGIN_ASSERT(num_queries == in[4].desc.dims.d[1]);
     PLUGIN_ASSERT(num_queries == out[0].desc.dims.d[1]);
 
     // Check num_heads
     auto num_heads = in[0].desc.dims.d[2];
     PLUGIN_ASSERT(num_heads == in[3].desc.dims.d[2]);
-    PLUGIN_ASSERT(num_heads == in[4].desc.dims.d[1]);
+    PLUGIN_ASSERT(num_heads == in[4].desc.dims.d[2]);
 
     // Check num_levels
     auto num_levels = in[1].desc.dims.d[0];
     PLUGIN_ASSERT(num_levels == in[2].desc.dims.d[0]);
     PLUGIN_ASSERT(num_levels == in[3].desc.dims.d[3]);
+    PLUGIN_ASSERT(num_levels == in[4].desc.dims.d[3]);
+
+    // Check num_points
+    auto num_points = in[3].desc.dims.d[4];
+    PLUGIN_ASSERT(num_points == in[4].desc.dims.d[4]);
+
+    // Check output_dim
+    auto dim_per_head = in[0].desc.dims.d[3];
+    auto output_dim = num_heads * dim_per_head;
+    PLUGIN_ASSERT(output_dim == out[0].desc.dims.d[2]);
 
     return 0;
   }
@@ -271,8 +283,8 @@ public:
                           IExprBuilder &exprBuilder) noexcept override {
     //   inputs[0] -> value (bs, num_keys, num_heads, dim_per_head)
     //   inputs[3] -> sampling_loc (bs, num_queries, num_heads, num_levels,
-    //   num_points, 2) outputs[0] -> output (bs, num_queries, num_heads *
-    //   dim_per_head)
+    //                              num_points, 2)
+    //   outputs[0] -> output (bs, num_queries, num_heads * dim_per_head)
 
     PLUGIN_ASSERT(nbInputs == 5);
     PLUGIN_ASSERT(nbOutputs == 1);
@@ -307,6 +319,13 @@ public:
     //   can be modified through this parameter
     //   - he parameter itself can be redirected to a different array
 
+    PLUGIN_ASSERT(inputs[0] != nullptr);
+    PLUGIN_ASSERT(inputs[1] != nullptr);
+    PLUGIN_ASSERT(inputs[2] != nullptr);
+    PLUGIN_ASSERT(inputs[3] != nullptr);
+    PLUGIN_ASSERT(inputs[4] != nullptr);
+    PLUGIN_ASSERT(outputs[0] != nullptr);
+
     // We parse shapes from the stored dims
     // [0] -> (bs, num_keys, num_heads, dim_per_head)
     // [3] -> (bs, num_queries, num_heads, num_levels, num_points, 2)
@@ -322,32 +341,49 @@ public:
     int num_levels = sampling_loc_dims.d[3];
     int num_points = sampling_loc_dims.d[4];
 
+    // Log tensor shapes for debugging
+    std::stringstream ss;
+    ss << "DeformableAttentionPlugin::enqueue: " << std::endl
+       << "  value shape: (" << bs << ", " << num_keys << ", " << num_heads
+       << ", " << dim_per_head << ")" << std::endl
+       << "  sampling_loc shape: (" << bs << ", " << num_queries << ", "
+       << num_heads << ", " << num_levels << ", " << num_points << ", 2)"
+       << std::endl
+       << "  attn_weight shape: (" << bs << ", " << num_queries << ", "
+       << num_heads << ", " << num_levels << ", " << num_points << ")"
+       << std::endl;
+    logVerbose(ss.str().c_str());
+
     DataType dtype = inputDesc[0].type;
 
     at::ScalarType scalar_type;
     try {
       scalar_type = getATenDtype(dtype);
     } catch (const std::runtime_error &e) {
-      std::cerr << "Error: " << e.what() << std::endl;
+      caughtError(e);
       return 1;
     }
     auto options = at::TensorOptions().dtype(scalar_type).device(at::kCUDA);
     auto options_long = at::TensorOptions().dtype(at::kLong).device(at::kCUDA);
+
+    // Wrap the provided cudaStream_t in a c10::cuda::CUDAStream
+    c10::cuda::CUDAStream cuda_stream =
+        c10::cuda::getStreamFromExternal(stream, c10::cuda::current_device());
+
+    // Use CUDAStreamGuard to set this stream as current
+    c10::cuda::CUDAStreamGuard stream_guard(cuda_stream);
 
     // We're telling PyTorch to use externally-managed memory provied by
     // TensorRT
     at::Tensor value =
         at::from_blob(const_cast<void *>(inputs[0]),
                       {bs, num_keys, num_heads, dim_per_head}, options);
-
     // reinterpret_cast<int64_t*>
     at::Tensor spatial_shapes = at::from_blob(const_cast<void *>(inputs[1]),
                                               {num_levels, 2}, options_long);
-
     // reinterpret_cast<int64_t*>
     at::Tensor level_start_index = at::from_blob(const_cast<void *>(inputs[2]),
                                                  {num_levels}, options_long);
-
     at::Tensor sampling_loc = at::from_blob(
         const_cast<void *>(inputs[3]),
         {bs, num_queries, num_heads, num_levels, num_points, 2}, options);
@@ -356,23 +392,14 @@ public:
         const_cast<void *>(inputs[4]),
         {bs, num_queries, num_heads, num_levels, num_points}, options);
 
-    at::Tensor output = codetr::ms_deform_attn_forward(
+    // Wrap outputs[0] as the output tensor
+    at::Tensor trt_output =
+        at::from_blob(const_cast<void *>(outputs[0]),
+                      {bs, num_queries, num_heads * dim_per_head}, options);
+
+    codetr::ms_deform_attn_forward_reference(
         value, spatial_shapes, level_start_index, sampling_loc, attn_weight,
-        mParams.im2col_step);
-
-    // This memcpy from output to output_ptr can be removed if you pre-allocate
-    // the output using from_blob and pass it into ms_deform_attn_forward.
-
-    if (scalar_type == at::kFloat) {
-      std::memcpy(outputs[0], output.data_ptr<float>(),
-                  output.numel() * sizeof(float));
-    } else if (scalar_type == at::kHalf) {
-      std::memcpy(outputs[0], output.data_ptr<at::Half>(),
-                  output.numel() * sizeof(at::Half));
-    } else {
-      std::cerr << "Unsupported scalar type" << std::endl;
-      return 1;
-    }
+        trt_output, mParams.im2col_step);
 
     return 0;
   }

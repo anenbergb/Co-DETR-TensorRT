@@ -993,11 +993,12 @@ void ms_deformable_col2im_cuda(
   }
 }
 
-at::Tensor ms_deform_attn_forward(const at::Tensor &value,
+void ms_deform_attn_forward_reference(const at::Tensor &value,
                                        const at::Tensor &spatial_shapes,
                                        const at::Tensor &level_start_index,
                                        const at::Tensor &sampling_loc,
                                        const at::Tensor &attn_weight,
+                                       at::Tensor &output,
                                        const int64_t im2col_step) {
   AT_ASSERTM(value.is_contiguous(), "value tensor has to be contiguous");
   AT_ASSERTM(spatial_shapes.is_contiguous(),
@@ -1031,11 +1032,21 @@ at::Tensor ms_deform_attn_forward(const at::Tensor &value,
   AT_ASSERTM(batch % im2col_step_ == 0, "batch(%d) must divide im2col_step(%d)",
              batch, im2col_step_);
 
-  auto output =
-      at::zeros({batch, num_query, num_heads, channels}, value.options());
+  // Check output (batch)
+  AT_ASSERTM(output.is_contiguous(), "output tensor has to be contiguous");
+  AT_ASSERTM(output.is_cuda(), "output must be a CUDA tensor");
+  AT_ASSERTM(output.size(0) == batch, "output size(0) must be equal to batch");
+  AT_ASSERTM(output.size(1) == num_query,
+             "output size(1) must be equal to num_query");
+  AT_ASSERTM(output.size(2) == num_heads* channels,
+             "output size(2) must be equal to num_heads * channels");
+  
+  // Initialize the output with zeros
+  output.zero_();
+  auto output_view = output.view({batch, num_query, num_heads, channels});
 
   const int batch_n = im2col_step_;
-  auto output_n = output.view(
+  auto output_n = output_view.view(
       {batch / im2col_step_, batch_n, num_query, num_heads, channels});
   auto per_value_size = spatial_size * num_heads * channels;
   auto per_sample_loc_size = num_query * num_heads * num_levels * num_point * 2;
@@ -1057,8 +1068,25 @@ at::Tensor ms_deform_attn_forward(const at::Tensor &value,
               num_point, columns.data_ptr<scalar_t>());
         }));
   }
+}
 
-  output = output.view({batch, num_query, num_heads * channels});
+at::Tensor ms_deform_attn_forward(const at::Tensor &value,
+                                       const at::Tensor &spatial_shapes,
+                                       const at::Tensor &level_start_index,
+                                       const at::Tensor &sampling_loc,
+                                       const at::Tensor &attn_weight,
+                                       const int64_t im2col_step) {
+
+  const int64_t batch = value.size(0);
+  const int spatial_size = value.size(1);
+  const int num_heads = value.size(2);
+  const int channels = value.size(3);
+  const int num_query = sampling_loc.size(1);
+
+  auto output = at::zeros({batch, num_query, num_heads * channels}, value.options());
+  ms_deform_attn_forward_reference(
+      value, spatial_shapes, level_start_index, sampling_loc, attn_weight,
+      output, im2col_step);
 
   return output;
 }

@@ -13,7 +13,7 @@ setup(
     python_requires=">=3.10",
     packages=find_packages(),
     install_requires=[
-        "torch"
+        "torch",
         "torch-tensorrt"
     ],
     extras_require={
