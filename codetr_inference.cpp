@@ -1,8 +1,10 @@
 #include <NvInfer.h>
 #include <NvInferPlugin.h>
+#include <NvInferRuntime.h> // for createInferRuntime
 #include <argparse/argparse.hpp>
 #include <cassert>
 #include <chrono>
+#include <cuda_runtime_api.h> // for cudaMalloc/cudaMemcpy
 #include <iostream>
 #include <opencv2/opencv.hpp>
 #include <string>
@@ -185,13 +187,16 @@ void draw_boxes(cv::Mat &image, const torch::Tensor &boxes,
   }
 }
 
-bool load_tensorrt_plugin(std::string &trt_plugin_path) {
-  class Logger : public nvinfer1::ILogger {
-    void log(Severity severity, const char *msg) noexcept override {
-      if (severity <= Severity::kWARNING)
-        std::cout << "[TRT] " << msg << std::endl;
+struct Logger : public nvinfer1::ILogger {
+  void log(Severity severity, const char *msg) noexcept override {
+    if (severity <= Severity::kWARNING) {
+      std::cout << "[TRT] " << msg << std::endl;
     }
-  } logger;
+  }
+};
+
+bool load_tensorrt_plugin(std::string &trt_plugin_path) {
+  Logger logger;
 
   if (!initLibNvInferPlugins(&logger, "")) {
     std::cerr << "Failed to initialize TensorRT plugins." << std::endl;
@@ -207,6 +212,277 @@ bool load_tensorrt_plugin(std::string &trt_plugin_path) {
   std::cout << "Loading plugin library..." << std::endl;
   auto libHandle = registry->loadLibrary(trt_plugin_path.c_str());
   return true;
+}
+
+nvinfer1::ICudaEngine *load_trt_engine(const std::string &engine_path,
+                                       nvinfer1::ILogger &logger) {
+  std::cout << "Loading TensorRT engine from: " << engine_path << std::endl;
+  // 1. Read engine file into memory
+  std::ifstream file(engine_path, std::ios::binary | std::ios::ate);
+  if (!file.good()) {
+    std::cerr << "Error opening engine file: " << engine_path << std::endl;
+    return nullptr;
+  }
+  const size_t file_size = file.tellg();
+  file.seekg(0, std::ios::beg);
+  std::vector<char> engine_data(file_size);
+  file.read(engine_data.data(), file_size);
+  file.close();
+
+  // There should exist a function to read the engine file
+  // std::vector<char> engine_data = nvinfer1::readModelFromFile(engine_path);
+
+  std::cout << "Creating TensorRT runtime and deserializing engine..."
+            << std::endl;
+  // 2. Create runtime & deserialize engine
+  nvinfer1::IRuntime *runtime = nvinfer1::createInferRuntime(logger);
+  if (!runtime) {
+    std::cerr << "Failed to create InferRuntime." << std::endl;
+    return nullptr;
+  }
+  nvinfer1::ICudaEngine *engine =
+      runtime->deserializeCudaEngine(engine_data.data(), file_size);
+  if (!engine) {
+    std::cerr << "Failed to deserialize CUDA engine." << std::endl;
+    runtime->destroy();
+    return nullptr;
+  }
+
+  // If you only create one engine, you can destroy runtime here
+  runtime->destroy();
+  return engine;
+}
+
+inline size_t volume(const std::vector<int64_t> &dims) {
+  size_t v = 1;
+  for (auto d : dims)
+    v *= d;
+  return v;
+}
+
+/**
+ * Utility: Convert nvinfer1::Dims to vector<int64_t>
+ */
+std::vector<int64_t> dimsToVector(const nvinfer1::Dims &d) {
+  std::vector<int64_t> shape(d.nbDims);
+  for (int i = 0; i < d.nbDims; ++i) {
+    shape[i] = d.d[i];
+  }
+  return shape;
+}
+
+/**
+ * Returns size in bytes for a given TRT data type:
+ * - kFLOAT -> 4
+ * - kHALF  -> 2
+ * - kINT32 -> 4
+ * - etc.
+ */
+inline size_t elementSize(nvinfer1::DataType dtype) {
+  switch (dtype) {
+  case nvinfer1::DataType::kFLOAT:
+    return 4;
+  case nvinfer1::DataType::kHALF:
+    return 2;
+  case nvinfer1::DataType::kINT8:
+    return 1;
+  case nvinfer1::DataType::kINT32:
+    return 4;
+  case nvinfer1::DataType::kBOOL:
+    return 1;
+  case nvinfer1::DataType::kINT64:
+    return 8;
+  default:
+    throw std::runtime_error("Unsupported DataType in elementSize()");
+  }
+}
+
+/**
+ * Utility to create a CPU torch::Tensor of the correct dtype
+ * from a Torch tensor which might be on GPU or in a different dtype.
+ */
+torch::Tensor convertToTRTDtype(const torch::Tensor &t,
+                                nvinfer1::DataType trt_dtype) {
+  switch (trt_dtype) {
+  case nvinfer1::DataType::kFLOAT:
+    return t.to(torch::kFloat32).contiguous().cpu();
+  case nvinfer1::DataType::kHALF:
+    return t.to(torch::kFloat16).contiguous().cpu();
+  case nvinfer1::DataType::kINT32:
+    return t.to(torch::kInt32).contiguous().cpu();
+  case nvinfer1::DataType::kINT64:
+    return t.to(torch::kInt64).contiguous().cpu();
+  default:
+    throw std::runtime_error(
+        "Unsupported or unexpected TRT DataType in convertToTRTDtype()");
+  }
+}
+
+/**
+ * Run inference on the given engine with batch_inputs, img_masks
+ * that are shaped e.g. [1,3,H,W] and [1,H,W].
+ * The engine is expected to produce (boxes, scores, labels).
+ *
+ * Steps:
+ * 1) Create an ExecutionContext
+ * 2) Determine binding indices
+ * 3) Convert inputs to correct dtype (float32/float16)
+ * 4) Allocate device buffers
+ * 5) Copy inputs -> GPU
+ * 6) context->executeV2
+ * 7) Copy outputs -> host
+ * 8) Convert to torch::Tensor
+ * 9) Cleanup
+ */
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+run_trt_inference(nvinfer1::ICudaEngine *engine,
+                  const torch::Tensor &batch_inputs, // shape [1,3,H,W]
+                  const torch::Tensor &img_masks)    // shape [1,H,W]
+{
+  // 1. Create execution context
+  nvinfer1::IExecutionContext *context = engine->createExecutionContext();
+  if (!context) {
+    throw std::runtime_error("Failed to create ExecutionContext!");
+  }
+
+  // Suppose your engine has 5 bindings:
+  // 0: input0 -> batch_inputs
+  // 1: input1 -> img_masks
+  // 2: out_boxes
+  // 3: out_scores
+  // 4: out_labels
+  int inputIndex0 = 0;
+  int inputIndex1 = 1;
+  int outIndex0 = 2;
+  int outIndex1 = 3;
+  int outIndex2 = 4;
+
+  // By default Co-DETR export doesn't use dynamic shapes
+  // but if you do, you can set the binding dimensions here
+  // int H = batch_inputs.size(2);
+  // int W = batch_inputs.size(3);
+  // context->setBindingDimensions(inputIndex0, nvinfer1::Dims4(1,3,H,W));
+  // context->setBindingDimensions(inputIndex1, nvinfer1::Dims3(1,H,W));
+
+  // 2. Inspect engine data types
+  nvinfer1::DataType in0_dtype = engine->getBindingDataType(inputIndex0);
+  nvinfer1::DataType in1_dtype = engine->getBindingDataType(inputIndex1);
+  nvinfer1::DataType out0_dtype = engine->getBindingDataType(outIndex0);
+  nvinfer1::DataType out1_dtype = engine->getBindingDataType(outIndex1);
+  nvinfer1::DataType out2_dtype = engine->getBindingDataType(outIndex2);
+
+  // 3. Convert input Tensors to match TRT dtype
+  auto in0_host = convertToTRTDtype(batch_inputs, in0_dtype);
+  auto in1_host = convertToTRTDtype(img_masks, in1_dtype);
+
+  // 4. Figure out binding dims (static or dynamic)
+  //    For dynamic shape, do it after setBindingDimensions()
+  auto bdim_in0 = context->getBindingDimensions(inputIndex0);
+  auto bdim_in1 = context->getBindingDimensions(inputIndex1);
+  auto bdim_out0 = context->getBindingDimensions(outIndex0);
+  auto bdim_out1 = context->getBindingDimensions(outIndex1);
+  auto bdim_out2 = context->getBindingDimensions(outIndex2);
+
+  // Convert to vector<int64_t> for Torch
+  auto shape_in0 = dimsToVector(bdim_in0);   // e.g. [1,3,H,W]
+  auto shape_in1 = dimsToVector(bdim_in1);   // e.g. [1,H,W]
+  auto shape_out0 = dimsToVector(bdim_out0); // e.g. [1,300,4]
+  auto shape_out1 = dimsToVector(bdim_out1); // e.g. [1,300]
+  auto shape_out2 = dimsToVector(bdim_out2); // e.g. [1,300]
+
+  // 5. Compute the memory sizes (in bytes)
+  size_t in0_numel = in0_host.numel();
+  size_t in1_numel = in1_host.numel();
+  size_t in0_bytes = in0_numel * elementSize(in0_dtype);
+  size_t in1_bytes = in1_numel * elementSize(in1_dtype);
+
+  // For outputs, we rely on the shape from binding dims
+  auto out0_numel = 1ULL;
+  for (auto d : shape_out0)
+    out0_numel *= d;
+  auto out1_numel = 1ULL;
+  for (auto d : shape_out1)
+    out1_numel *= d;
+  auto out2_numel = 1ULL;
+  for (auto d : shape_out2)
+    out2_numel *= d;
+
+  size_t out0_bytes = out0_numel * elementSize(out0_dtype);
+  size_t out1_bytes = out1_numel * elementSize(out1_dtype);
+  size_t out2_bytes = out2_numel * elementSize(out2_dtype);
+
+  // 6. Allocate device buffers
+  std::vector<void *> deviceBuffers(engine->getNbBindings(), nullptr);
+  cudaMalloc(&deviceBuffers[inputIndex0], in0_bytes);
+  cudaMalloc(&deviceBuffers[inputIndex1], in1_bytes);
+  cudaMalloc(&deviceBuffers[outIndex0], out0_bytes);
+  cudaMalloc(&deviceBuffers[outIndex1], out1_bytes);
+  cudaMalloc(&deviceBuffers[outIndex2], out2_bytes);
+
+  // 7. Copy inputs to device
+  cudaMemcpy(deviceBuffers[inputIndex0], in0_host.data_ptr(), in0_bytes,
+             cudaMemcpyHostToDevice);
+
+  cudaMemcpy(deviceBuffers[inputIndex1], in1_host.data_ptr(), in1_bytes,
+             cudaMemcpyHostToDevice);
+
+  // 8. Run inference
+  context->executeV2(deviceBuffers.data());
+
+  // 9. Copy outputs back
+  std::vector<char> out0_host_vec(out0_bytes);
+  std::vector<char> out1_host_vec(out1_bytes);
+  std::vector<char> out2_host_vec(out2_bytes);
+
+  cudaMemcpy(out0_host_vec.data(), deviceBuffers[outIndex0], out0_bytes,
+             cudaMemcpyDeviceToHost);
+  cudaMemcpy(out1_host_vec.data(), deviceBuffers[outIndex1], out1_bytes,
+             cudaMemcpyDeviceToHost);
+  cudaMemcpy(out2_host_vec.data(), deviceBuffers[outIndex2], out2_bytes,
+             cudaMemcpyDeviceToHost);
+
+  // 10. Convert them to torch::Tensor
+  // For now, assume boxes & scores are float, labels are int
+  // but it depends on your engine.
+  auto out_boxes = torch::empty(
+      shape_out0,
+      torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32));
+  auto out_scores = torch::empty(
+      shape_out1,
+      torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32));
+  auto out_labels = torch::empty(
+      shape_out2,
+      torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt64));
+
+  // Copy memory into those Tensors
+  // out_boxes
+  std::memcpy(out_boxes.data_ptr(), out0_host_vec.data(), out0_bytes);
+
+  // out_scores
+  std::memcpy(out_scores.data_ptr(), out1_host_vec.data(), out1_bytes);
+
+  // out_labels
+  if (out2_dtype == nvinfer1::DataType::kINT32) {
+    std::cout << "TensorRT label output is int32, converting to int64"
+              << std::endl;
+    auto *int32_ptr = reinterpret_cast<int32_t *>(out2_host_vec.data());
+    auto num_labels = out2_numel;
+    auto out_data = out_labels.data_ptr<int64_t>();
+    for (size_t i = 0; i < num_labels; i++) {
+      out_data[i] = static_cast<int64_t>(int32_ptr[i]);
+    }
+  } else if (out2_dtype == nvinfer1::DataType::kINT64) {
+    // direct memcpy
+    std::memcpy(out_labels.data_ptr(), out2_host_vec.data(), out2_bytes);
+  }
+
+  // 11. Cleanup device buffers
+  for (void *buf : deviceBuffers) {
+    cudaFree(buf);
+  }
+  context->destroy();
+
+  return std::make_tuple(out_boxes, out_scores, out_labels);
 }
 
 int main(int argc, char *argv[]) {
@@ -293,20 +569,23 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
+  bool is_tensorrt_engine = false;
+  // Check if the model file is TorchScript or TensorRT Engine
+  if (model_path.ends_with(".ts")) {
+    std::cout << "We assume the model is TorchScript because it ends with '.ts'"
+              << std::endl;
+  } else if (model_path.ends_with(".engine")) {
+    is_tensorrt_engine = true;
+    std::cout << "We assume the model is a Serialized TensorRT Engine because "
+                 "it ends with '.engine'"
+              << std::endl;
+  }
+
   torch_tensorrt::set_device(0);
 
   // Convert dtype string to torch dtype
   torch::Dtype dtype =
       (dtype_str == "float16") ? torch::kFloat16 : torch::kFloat32;
-
-  // Load model
-  std::cout << "Loading model from: " << model_path << std::endl;
-
-  // Load the model using torch::jit::load with CUDA support
-  torch::jit::script::Module model = torch::jit::load(model_path, torch::kCUDA);
-  model.to(torch::kCUDA);
-  model.to(dtype);
-  model.eval();
 
   // Load image
   std::cout << "Loading image from: " << image_path << std::endl;
@@ -323,24 +602,43 @@ int main(int argc, char *argv[]) {
   batch_inputs = batch_inputs.to(torch::kCUDA).to(dtype);
   img_masks = img_masks.to(torch::kCUDA).to(dtype);
 
-  // Run inference
-  std::vector<torch::jit::IValue> inputs;
-  inputs.push_back(batch_inputs);
-  inputs.push_back(img_masks);
+  if (is_tensorrt_engine) {
+    nvinfer1::ICudaEngine *engine = load_trt_engine(engine_path, logger);
+    if (!engine) {
+      return EXIT_FAILURE;
+    }
+    auto [boxes, scores, labels] =
+        run_trt_inference(engine, batch_inputs, img_masks);
 
-  // Co-DETR model. We assume batch size is 1.
-  // The model expects two inputs:
-  //     batch_inputs (Tensor): has shape (1, 3, H, W) RGB ordered channels
-  //     img_masks (Tensor): masks for the input image, has shape (1, H, W).
-  // Output tensors: num_boxes is typically 300
-  // boxes: has shape (1,num_boxes,4) where 4 is (x1,y1,x2,y2)
-  // scores: has shape (1,num_boxes)
-  // labels: has shape (1,num_boxes)
-  std::cout << "Running inference..." << std::endl;
-  auto output = model.forward(inputs).toTuple();
-  auto boxes = output->elements()[0].toTensor().to(torch::kFloat32).cpu();
-  auto scores = output->elements()[1].toTensor().to(torch::kFloat32).cpu();
-  auto labels = output->elements()[2].toTensor().to(torch::kInt64).cpu();
+  } else {
+    // Load model
+    std::cout << "Loading model from: " << model_path << std::endl;
+
+    // Load the model using torch::jit::load with CUDA support
+    torch::jit::script::Module model =
+        torch::jit::load(model_path, torch::kCUDA);
+    model.to(torch::kCUDA);
+    model.to(dtype);
+    model.eval();
+    // Run inference
+    std::vector<torch::jit::IValue> inputs;
+    inputs.push_back(batch_inputs);
+    inputs.push_back(img_masks);
+    // Co-DETR model. We assume batch size is 1.
+    // The model expects two inputs:
+    //     batch_inputs (Tensor): has shape (1, 3, H, W) RGB ordered channels
+    //     img_masks (Tensor): masks for the input image, has shape (1, H, W).
+    // Output tensors: num_boxes is typically 300
+    // boxes: has shape (1,num_boxes,4) where 4 is (x1,y1,x2,y2)
+    // scores: has shape (1,num_boxes)
+    // labels: has shape (1,num_boxes)
+    std::cout << "Running inference..." << std::endl;
+    auto output = model.forward(inputs).toTuple();
+    auto boxes = output->elements()[0].toTensor().to(torch::kFloat32).cpu();
+    auto scores = output->elements()[1].toTensor().to(torch::kFloat32).cpu();
+    auto labels = output->elements()[2].toTensor().to(torch::kInt64).cpu();
+  }
+
   std::cout << "Postprocessing detections..." << std::endl;
   // Postprocess predictions
   auto [final_boxes, final_scores, final_labels] = postprocess_predictions(
@@ -354,22 +652,23 @@ int main(int argc, char *argv[]) {
   std::cout << "Output saved to: " << output_path << std::endl;
 
   // Benchmark the model
-  std::cout << "Benchmarking over " << bench_iterations << " iterations..."
-            << std::endl;
-  double total_time_ms = 0.0;
-  for (int i = 0; i < bench_iterations; ++i) {
-    auto start_bench = std::chrono::high_resolution_clock::now();
-    model.forward(inputs);
-    auto end_bench = std::chrono::high_resolution_clock::now();
-    double bench_duration =
-        std::chrono::duration<double, std::milli>(end_bench - start_bench)
-            .count();
-    total_time_ms += bench_duration;
-  }
+  // std::cout << "Benchmarking over " << bench_iterations << " iterations..."
+  //           << std::endl;
+  // double total_time_ms = 0.0;
+  // for (int i = 0; i < bench_iterations; ++i) {
+  //   auto start_bench = std::chrono::high_resolution_clock::now();
+  //   model.forward(inputs);
+  //   auto end_bench = std::chrono::high_resolution_clock::now();
+  //   double bench_duration =
+  //       std::chrono::duration<double, std::milli>(end_bench - start_bench)
+  //           .count();
+  //   total_time_ms += bench_duration;
+  // }
 
-  double avg_time_ms = total_time_ms / bench_iterations;
-  std::cout << "Average inference time: " << std::fixed << std::setprecision(2)
-            << avg_time_ms << "ms" << std::endl;
+  // double avg_time_ms = total_time_ms / bench_iterations;
+  // std::cout << "Average inference time: " << std::fixed <<
+  // std::setprecision(2)
+  //           << avg_time_ms << "ms" << std::endl;
 
   return EXIT_SUCCESS;
 }
