@@ -219,34 +219,9 @@ class Visualizer:
         vis = self.visualizer.get_image()
         return vis
 
-import tensorrt as trt
-import ctypes
-TRT_LOGGER = trt.Logger(trt.Logger.INFO)
-
-def load_plugin_lib(plugin_lib_file_path):
-
-    if os.path.isfile(plugin_lib_file_path):
-        try:
-            # Python specifies that winmode is 0 by default, but some implementations
-            # incorrectly default to None instead. See:
-            # https://docs.python.org/3.8/library/ctypes.html
-            # https://github.com/python/cpython/blob/3.10/Lib/ctypes/__init__.py#L343
-            ctypes.CDLL(plugin_lib_file_path, winmode=0)
-        except TypeError:
-            # winmode only introduced in python 3.8
-            ctypes.CDLL(plugin_lib_file_path)
-        return
-
-    raise IOError(f"Failed to load plugin library: {plugin_lib_file_path}")
 
 def main():
     args = parse_args()
-
-    trt.init_libnvinfer_plugins(None, "")
-    load_plugin_lib(args.plugin_lib)
-    registry = trt.get_plugin_registry()
-    plugin_creator = registry.get_creator("DeformableAttentionPlugin", "1", "")
-    assert plugin_creator is not None, "Failed to get plugin creator for DeformableAttentionPlugin"
 
     # Disable TensorRT safe mode to avoid warnings
     torch_tensorrt.runtime.set_multi_device_safe_mode(False)
@@ -284,12 +259,11 @@ def main():
     print(f"Exporting model with precision={args.dtype}, optimization_level={args.optimization_level}")
     os.makedirs(args.output, exist_ok=True)
     with torch.inference_mode():
+
         def run_pytorch_model():
             return model(batch_inputs, img_masks)
-        output_pytorch = run_pytorch_model()
 
-        model_compiled = torch_tensorrt.compile(model,inputs=(batch_inputs, img_masks),dryrun=True,min_block_size=1,enabled_precisions=(dtype,))
-        import ipdb; ipdb.set_trace()
+        output_pytorch = run_pytorch_model()
 
         vis = visualizer(*output_pytorch)
         vis_path = os.path.join(args.output, "pytorch_output.jpg")
@@ -310,11 +284,11 @@ def main():
             inputs=(batch_inputs, img_masks),
             enabled_precisions=(dtype,),
             optimization_level=args.optimization_level,
-            truncate_double = True,
-            require_full_compilation = False,
-            cache_built_engines=True,
+            truncate_double=True,
+            require_full_compilation=True,
+            cache_built_engines=False,
             reuse_cached_engines=False,
-            engine_cache_dir = os.path.join(args.output, "engine_cache"),
+            use_python_runtime=False,
         )
         print(f"✅ Model compiled to TensorRT at optimization level: {args.optimization_level}")
         model_type = torch_tensorrt._compile._parse_module_type(model_trt)
@@ -340,14 +314,26 @@ def main():
         benchmark_runtime(run_pytorch_model, run_tensorrt_model, iterations=args.iterations)
         torch.cuda.empty_cache()
         save_model(os.path.join(args.output, "codetr.ts"), model_trt, (batch_inputs, img_masks))
-        import ipdb; ipdb.set_trace()
         print_tensorrt_model(model_trt, os.path.join(args.output, "tensorrt_model.txt"))
+
+        # Then compile with TensorRT
+        model_trt_engine_bytes = torch_tensorrt.dynamo.convert_exported_program_to_serialized_trt_engine(
+            model_export,
+            inputs=(batch_inputs, img_masks),
+            enabled_precisions=(dtype,),
+            optimization_level=args.optimization_level,
+            truncate_double=True,
+            require_full_compilation=True,
+            use_python_runtime=False,
+        )
+        with open(os.path.join(args.output, "codetr.engine"), "wb") as f:
+            f.write(model_trt_engine_bytes)
 
 
 def save_model(save_path, model, inputs):
     """
     for 'torchscript' output format, this should be equivalent to
-    
+
     If the model is torch.fx.GraphModule, then first it will be retraced then saved
     model_ts = torch.jit.trace(model_trt, inputs)
     torch.jit.save(model_ts, save_path)
@@ -368,6 +354,7 @@ def print_tensorrt_model(model, save_path):
         f.write("\n\nTensorRT model structure [DEBUG MODE]:\n")
         f.write(model.print_readable())
     print(f"✅ TensorRT model structure saved to {save_path}")
+
 
 if __name__ == "__main__":
     main()

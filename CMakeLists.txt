@@ -56,6 +56,9 @@ target_link_libraries(codetr_inference
     ${TORCHTRT_LIB}
     ${TORCHTRT_RUNTIME_LIB}
     ${TORCHTRT_PLUGINS_LIB}
+    nvinfer
+    nvinfer_plugin
+    cudart
 )
 
 # Revert linker flag after TRTEngine registration
