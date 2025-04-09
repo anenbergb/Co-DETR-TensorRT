@@ -53,10 +53,14 @@ class CoDETR(nn.Module):
         processing.
 
         Args:
-            batch_inputs (Tensor): Inputs, has shape (bs, dim, H, W).
+            batch_inputs (Tensor): Inputs, has shape (bs, 3, H, W).
+            img_masks (Tensor): Masks for the input images, has shape (bs, H, W).
 
         Returns:
-
+            Tuple[Tensor, Tensor, Tensor]:
+                detected_boxes: (bs,num_boxes,4) where num_boxes is typicaly 300
+                scores: (bs,num_boxes)
+                labels: (bs,num_boxes)
         """
         # (bs,dim,H,W) -> List[ (bs,dim,H,W), ...]
         image_feats = self.backbone(batch_inputs)

@@ -1,6 +1,7 @@
 #include <NvInfer.h>
 #include <NvInferPlugin.h>
 #include <argparse/argparse.hpp>
+#include <cassert>
 #include <chrono>
 #include <iostream>
 #include <opencv2/opencv.hpp>
@@ -65,17 +66,24 @@ preprocess_image(const cv::Mat &image, int target_height, int target_width) {
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-postprocess_predictions(const torch::Tensor &boxes,  // (1,300,4)
-                        const torch::Tensor &scores, // (1,300)
-                        const torch::Tensor &labels, // (1,300)
+postprocess_predictions(const torch::Tensor &batch_boxes,  // (1,300,4)
+                        const torch::Tensor &batch_scores, // (1,300)
+                        const torch::Tensor &batch_labels, // (1,300)
                         float scale, float score_threshold = 0.3,
                         float iou_threshold = 0.5) {
 
+  // Batch size must be 1
+  assert(batch_boxes.size(0) == 1);
+  // Remove batch dimension
+  auto boxes = batch_boxes.index({0});   // (300,4)
+  auto scores = batch_scores.index({0}); // (300,)
+  auto labels = batch_labels.index({0}); // (300,)
   // Apply score threshold
   auto valid_mask = scores > score_threshold;
-  auto valid_boxes = boxes.index_select(0, valid_mask.nonzero().squeeze());
-  auto valid_scores = scores.index_select(0, valid_mask.nonzero().squeeze());
-  auto valid_labels = labels.index_select(0, valid_mask.nonzero().squeeze());
+  auto indices = valid_mask.nonzero();
+  auto valid_boxes = boxes.index_select(0, indices);
+  auto valid_scores = scores.index_select(0, indices);
+  auto valid_labels = labels.index_select(0, indices);
 
   // Apply NMS
   auto keep = vision::ops::nms(valid_boxes, valid_scores, iou_threshold);
@@ -155,8 +163,29 @@ int main(int argc, char *argv[]) {
       .default_value(std::string("output.jpg"));
 
   program.add_argument("--dtype")
-      .help("Data type for inference (float16 or float32)")
+      .help("Data type for inference (float16 or float32). The model must be "
+            "exported with the same dtype.")
       .default_value(std::string("float16"));
+
+  program.add_argument("--target-height")
+      .help("Target height for input image resizing")
+      .default_value(768)
+      .scan<'i', int>();
+
+  program.add_argument("--target-width")
+      .help("Target width for input image resizing")
+      .default_value(1152)
+      .scan<'i', int>();
+
+  program.add_argument("--score-threshold")
+      .help("Confidence threshold for detection filtering")
+      .default_value(0.3f)
+      .scan<'f', float>();
+
+  program.add_argument("--iou-threshold")
+      .help("IoU threshold for non-maximum suppression")
+      .default_value(0.5f)
+      .scan<'f', float>();
 
   program.add_argument("--trt-plugin-path")
       .help("Path to libdeformable_attention_plugin.so")
@@ -176,6 +205,10 @@ int main(int argc, char *argv[]) {
   std::string output_path = program.get<std::string>("--output");
   std::string dtype_str = program.get<std::string>("--dtype");
   std::string trt_plugin_path = program.get<std::string>("--trt-plugin-path");
+  int target_height = program.get<int>("--target-height");
+  int target_width = program.get<int>("--target-width");
+  float score_threshold = program.get<float>("--score-threshold");
+  float iou_threshold = program.get<float>("--iou-threshold");
 
   // Validate dtype
   if (dtype_str != "float16" && dtype_str != "float32") {
@@ -206,32 +239,39 @@ int main(int argc, char *argv[]) {
 
   // Load image
   std::cout << "Loading image from: " << image_path << std::endl;
-  cv::Mat image = cv::imread(image_path);
+  // the image will be loaded in BGR format, which is OpenCV's default
+  cv::Mat image = cv::imread(image_path, cv::IMREAD_COLOR);
   if (image.empty()) {
     std::cerr << "Failed to load image: " << image_path << std::endl;
     return EXIT_FAILURE;
   }
 
   // Preprocess image
-  int target_height = 768;
-  int target_width = 1152;
-  auto [input_tensor, mask_tensor, scale] =
+  auto [batch_inputs, img_masks, scale] =
       preprocess_image(image, target_height, target_width);
-  input_tensor = input_tensor.to(torch::kCUDA).to(dtype);
-  mask_tensor = mask_tensor.to(torch::kCUDA).to(dtype);
+  batch_inputs = batch_inputs.to(torch::kCUDA).to(dtype);
+  img_masks = img_masks.to(torch::kCUDA).to(dtype);
 
   // Run inference
   std::cout << "Running inference..." << std::endl;
   auto start = std::chrono::high_resolution_clock::now();
 
   std::vector<torch::jit::IValue> inputs;
-  inputs.push_back(input_tensor);
-  inputs.push_back(mask_tensor);
+  inputs.push_back(batch_inputs);
+  inputs.push_back(img_masks);
 
+  // Co-DETR model. We assume batch size is 1.
+  // The model expects two inputs:
+  //     batch_inputs (Tensor): has shape (1, 3, H, W) RGB ordered channels
+  //     img_masks (Tensor): masks for the input image, has shape (1, H, W).
+  // Output tensors: num_boxes is typically 300
+  // boxes: has shape (1,num_boxes,4) where 4 is (x1,y1,x2,y2)
+  // scores: has shape (1,num_boxes)
+  // labels: has shape (1,num_boxes)
   auto output = model.forward(inputs).toTuple();
-  auto boxes = output->elements()[0].toTensor().cpu();
-  auto scores = output->elements()[1].toTensor().cpu();
-  auto labels = output->elements()[2].toTensor().cpu();
+  auto boxes = output->elements()[0].toTensor().to(torch::kFloat32).cpu();
+  auto scores = output->elements()[1].toTensor().to(torch::kFloat32).cpu();
+  auto labels = output->elements()[2].toTensor().to(torch::kFloat32).cpu();
 
   auto end = std::chrono::high_resolution_clock::now();
   auto duration =
@@ -239,8 +279,8 @@ int main(int argc, char *argv[]) {
   std::cout << "Inference time: " << duration.count() << " ms" << std::endl;
 
   // Postprocess predictions
-  auto [final_boxes, final_scores, final_labels] =
-      postprocess_predictions(boxes, scores, labels, scale);
+  auto [final_boxes, final_scores, final_labels] = postprocess_predictions(
+      boxes, scores, labels, scale, score_threshold, iou_threshold);
 
   // Draw boxes on original image
   draw_boxes(image, final_boxes, final_scores, final_labels);
