@@ -80,7 +80,7 @@ postprocess_predictions(const torch::Tensor &batch_boxes,  // (1,300,4)
   auto labels = batch_labels.index({0}); // (300,)
   // Apply score threshold
   auto valid_mask = scores > score_threshold;
-  auto indices = valid_mask.nonzero();
+  auto indices = valid_mask.nonzero().view(-1); // flatten to 1D tensor
   auto valid_boxes = boxes.index_select(0, indices);
   auto valid_scores = scores.index_select(0, indices);
   auto valid_labels = labels.index_select(0, indices);
@@ -271,7 +271,7 @@ int main(int argc, char *argv[]) {
   auto output = model.forward(inputs).toTuple();
   auto boxes = output->elements()[0].toTensor().to(torch::kFloat32).cpu();
   auto scores = output->elements()[1].toTensor().to(torch::kFloat32).cpu();
-  auto labels = output->elements()[2].toTensor().to(torch::kFloat32).cpu();
+  auto labels = output->elements()[2].toTensor().to(torch::kInt64).cpu();
 
   auto end = std::chrono::high_resolution_clock::now();
   auto duration =
