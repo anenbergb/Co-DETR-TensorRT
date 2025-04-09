@@ -19,6 +19,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(argparse)
 
+
+# TensorRT
+if(NOT DEFINED TENSORRT_DIR)
+    message(FATAL_ERROR "TENSORRT_DIR not specified. Use -DTENSORRT_DIR=/path/to/TensorRT")
+endif()
+
+
 # Torch-TensorRT config
 if(NOT DEFINED TORCH_TENSORRT_ROOT)
     message(FATAL_ERROR "TORCH_TENSORRT_ROOT not specified. Use -DTORCH_TENSORRT_ROOT=/path/to/torch_tensorrt")
@@ -37,6 +44,7 @@ target_include_directories(codetr_inference PRIVATE
     ${argparse_SOURCE_DIR}/include
     ${TORCHVISION_INCLUDE_DIRS}
     ${TORCH_TENSORRT_INCLUDE_DIRS}
+    ${TENSORRT_DIR}/include
 )
 
 # Find Torch-TensorRT shared libraries
@@ -50,14 +58,14 @@ target_link_options(codetr_inference PRIVATE "LINKER:--no-as-needed")
 # Link all required libraries
 target_link_libraries(codetr_inference
     ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
+    ${OpenCV_LIBRARIES}
     TorchVision::TorchVision
     argparse
     ${TORCHTRT_LIB}
     ${TORCHTRT_RUNTIME_LIB}
     ${TORCHTRT_PLUGINS_LIB}
-    nvinfer
-    nvinfer_plugin
+    ${TENSORRT_DIR}/lib/libnvinfer.so
+    ${TENSORRT_DIR}/lib/libnvinfer_plugin.so
     cudart
 )
 

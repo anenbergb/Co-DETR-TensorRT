@@ -12,6 +12,12 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-long-long -pedantic -Wno-deprecated-declarations")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-deprecated-declarations")
 
+# TensorRT
+if(NOT DEFINED TENSORRT_DIR)
+    message(FATAL_ERROR "TENSORRT_DIR not specified. Use -DTENSORRT_DIR=/path/to/TensorRT")
+endif()
+
+
 # Dependencies
 find_package(Torch REQUIRED)
 
@@ -25,12 +31,16 @@ target_link_options(deformable_attention_plugin PRIVATE "LINKER:--no-as-needed")
 # Include paths
 target_include_directories(deformable_attention_plugin PRIVATE
     ${TORCH_INCLUDE_DIRS}
+    ${TENSORRT_DIR}/include
 )
+
+# Add TensorRT library path
+link_directories(${TENSORRT_DIR}/lib)
 
 target_link_libraries(deformable_attention_plugin
     ${TORCH_LIBRARIES}
-    nvinfer
-    nvinfer_plugin
+    ${TENSORRT_DIR}/lib/libnvinfer.so
+    ${TENSORRT_DIR}/lib/libnvinfer_plugin.so
     cudart
 )
 

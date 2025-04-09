@@ -4,12 +4,18 @@ Co-DETR to TensorRT export
 
 # Installation
 
-## Installing pytorch/TensorRT
+## Installing TensorRT
+The version of TensorRT used to build and run the C++ Co-DETR inference executable must be the same version as that used to compile the Co-DETR model engine in python.
+
+This may require downloading a previous version of TensorRT
+https://developer.nvidia.com/nvidia-tensorrt-download
+
+
+### pytorch/TensorRT
 https://pytorch.org/TensorRT/getting_started/installation.html
 ```
 pip install torch torch-tensorrt tensorrt
 ```
-
 
 
 
@@ -83,25 +89,66 @@ Download a pre-built release https://github.com/pytorch/TensorRT/releases
 
 ## Building the codetr_inference C++ executable
 ```
-export Torch_DIR=/home/bryan/src/libtorch/share/cmake/Torch
-export TorchVision_DIR=/home/bryan/src/libtorchvision/share/cmake/TorchVision
-export TORCH_TENSORRT_ROOT=/home/bryan/src/torch_tensorrt
-
-
 mkdir build
 cd build
 cmake .. -Wno-dev \
 -DCMAKE_PREFIX_PATH="/home/bryan/src/libtorch;/home/bryan/src/libtorchvision" \
--DTORCH_TENSORRT_ROOT=/home/bryan/src/torch_tensorrt
+-DTORCH_TENSORRT_ROOT=/home/bryan/src/torch_tensorrt \
+-DTENSORRT_DIR=/home/bryan/src/TensorRT-10.7.0.23
 make -j8
 
-export LD_LIBRARY_PATH=/home/bryan/src/libtorch/lib:/home/bryan/src/libtorchvision/lib:/home/bryan/src/torch_tensorrt/lib:$LD_LIBRARY_PATH
-
-./codetr_inference \s
+LD_LIBRARY_PATH=/home/bryan/src/libtorch/lib:/home/bryan/src/libtorchvision/lib:/home/bryan/src/torch_tensorrt/lib:/home/bryan/src/TensorRT-10.7.0.23/lib:$LD_LIBRARY_PATH ./codetr_inference \
 --model /home/bryan/expr/co-detr/export/codetr_fp16/codetr.ts \
 --input ../assets/demo.jpg \
 --output /home/bryan/expr/co-detr/export/codetr_fp16/cpp_output.jpg
+
 ```
+
+Then to show that TensorRT is linked correctly
+```
+> ldd codetr_inference | grep nvinfer
+        libnvinfer.so.10 => /home/bryan/src/TensorRT-10.7.0.23/lib/libnvinfer.so.10 (0x00007ca307600000)
+        libnvinfer_plugin.so.10 => /home/bryan/src/TensorRT-10.7.0.23/lib/libnvinfer_plugin.so.10 (0x00007ca305200000)
+```
+
+
+
+### ABI  Mismatch
+
+Make sure the TorchVision and Torch-TensorRT libraries you're linking to are built with the same Torch version and ABI.
+If Torch-TensorRT or TorchVision was built from source:
+* Verify they're using the same PyTorch headers/libraries you’re linking against.
+* Check their ABI settings (they must match your -D_GLIBCXX_USE_CXX11_ABI=1).
+
+
+nm -C /home/bryan/src/libtorch/lib/libtorch.so | grep 'std::__cxx11'  -> no results
+nm -C /home/bryan/src/libtorchvision/lib/libtorchvision.so | grep 'std::__cxx11' -> lots of results
+nm -C /home/bryan/src/torch_tensorrt/lib/libtorchtrt.so | grep 'std::__cxx11' -> lots of results
+
+If you see lots of std::__cxx11::string, it's using the new ABI.
+
+torch 2.6
+
+nm -C /home/bryan/anaconda3/envs/mmcv/lib/python3.12/site-packages/torch_tensorrt/lib/libtorchtrt.so | grep 'std::string' | grep '__cxx11'
+
+
+// Ensure that TensorRT versions are the same. The version used in Python, and the version installed on device
+python:
+
+tensorrt.__version__
+'10.7.0.post1
+
+>>> import tensorrt
+>>> tensorrt.__version__
+'10.9.0.34'
+
+
+> nm -D /usr/lib/x86_64-linux-gnu/libnvinfer.so | grep tensorrt
+00000000224b0524 B tensorrt_build_root_20250301_9406843d50261530
+00000000224b0528 B tensorrt_version_10_9_0_34
+
+cat /usr/include/x86_64-linux-gnu/NvInferVersion.h
+
 
 
 
@@ -111,13 +158,16 @@ Built with TensorRT 10.9, so IPluginV3 and IPluginCreatorV3One were used.
 
 sudo apt-get install python3-dev
 ```
-cmake .. -Wno-dev \
--DCMAKE_PREFIX_PATH="/home/bryan/src/libtorch"
 
 cmake .. -Wno-dev \
--DCMAKE_PREFIX_PATH="/home/bryan/anaconda3/envs/mmcv/lib/python3.12/site-packages/torch"
-
+-DCMAKE_PREFIX_PATH="/home/bryan/anaconda3/envs/mmcv/lib/python3.12/site-packages/torch" \
+-DTENSORRT_DIR=/home/bryan/src/TensorRT-10.7.0.23
 make -j8
+```
+// verify the version of TensorRT that we are linking against\
+```
+> ldd libdeformable_attention_plugin.so | grep nvinfer
+    libnvinfer.so.10 => /home/bryan/src/TensorRT-10.7.0.23/lib/libnvinfer.so.10 (0x000079efcf800000)
 ```
 
 Building the csrc_tests
@@ -125,20 +175,14 @@ Building the csrc_tests
 ```
 mkdir build
 cd build
-cmake .. -Wno-dev
-make -j8
-LD_LIBRARY_PATH=/home/bryan/src/libtorch/lib:$LD_LIBRARY_PATH ./test_plugin
-```
-// /home/bryan/src/Co-DETR-TensorRT/codetr/csrc/build
+cmake .. -Wno-dev \
+-DTENSORRT_DIR=/home/bryan/src/TensorRT-10.7.0.23
 
-You can verify the embedded RPATH with
-```
-> readelf -d ./test_plugin | grep runpath
-0x000000000000001d (RUNPATH)            Library runpath: [/home/bryan/src/Co-DETR-TensorRT/codetr/csrc_tests/../csrc/build]
+make -j8
+LD_LIBRARY_PATH=/home/bryan/src/libtorch/lib:/home/bryan/src/TensorRT-10.7.0.23/lib:$LD_LIBRARY_PATH ./test_plugin
 ```
 
 Pytest test plugin
-
 ```
 # ensure that cuda python is installed
 pip install cuda-python
