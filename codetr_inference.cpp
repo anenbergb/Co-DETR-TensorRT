@@ -12,6 +12,35 @@
 #include <torchvision/ops/nms.h>
 #include <vector>
 
+const std::vector<std::string> coco_class_names = {
+    "person",        "bicycle",      "car",
+    "motorcycle",    "airplane",     "bus",
+    "train",         "truck",        "boat",
+    "traffic_light", "fire_hydrant", "stop_sign",
+    "parking_meter", "bench",        "bird",
+    "cat",           "dog",          "horse",
+    "sheep",         "cow",          "elephant",
+    "bear",          "zebra",        "giraffe",
+    "backpack",      "umbrella",     "handbag",
+    "tie",           "suitcase",     "frisbee",
+    "skis",          "snowboard",    "sports_ball",
+    "kite",          "baseball_bat", "baseball_glove",
+    "skateboard",    "surfboard",    "tennis_racket",
+    "bottle",        "wine_glass",   "cup",
+    "fork",          "knife",        "spoon",
+    "bowl",          "banana",       "apple",
+    "sandwich",      "orange",       "broccoli",
+    "carrot",        "hot_dog",      "pizza",
+    "donut",         "cake",         "chair",
+    "couch",         "potted_plant", "bed",
+    "dining_table",  "toilet",       "tv",
+    "laptop",        "mouse",        "remote",
+    "keyboard",      "cell_phone",   "microwave",
+    "oven",          "toaster",      "sink",
+    "refrigerator",  "book",         "clock",
+    "vase",          "scissors",     "teddy_bear",
+    "hair_drier",    "toothbrush"};
+
 std::tuple<torch::Tensor, torch::Tensor, float>
 preprocess_image(const cv::Mat &image, int target_height, int target_width) {
   // Convert BGR to RGB
@@ -103,21 +132,56 @@ void draw_boxes(cv::Mat &image, const torch::Tensor &boxes,
   auto scores_a = scores.accessor<float, 1>();
   auto labels_a = labels.accessor<int64_t, 1>();
 
+  const cv::Scalar box_color(0, 0, 255); // Red in BGR
+  const int thickness = 2;
+
   for (int i = 0; i < boxes_a.size(0); ++i) {
     float x1 = boxes_a[i][0];
     float y1 = boxes_a[i][1];
     float x2 = boxes_a[i][2];
     float y2 = boxes_a[i][3];
 
-    // Draw rectangle
-    cv::rectangle(image, cv::Point(x1, y1), cv::Point(x2, y2),
-                  cv::Scalar(0, 255, 0), 2);
+    // Draw red rectangle
+    cv::rectangle(image, cv::Point(x1, y1), cv::Point(x2, y2), box_color,
+                  thickness);
 
-    // Add label and score
-    std::string label_text = "Class " + std::to_string(labels_a[i]) + " (" +
-                             std::to_string(scores_a[i]) + ")";
-    cv::putText(image, label_text, cv::Point(x1, y1 - 10),
-                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 2);
+    // Format label text: "class 12: 90.5"
+    std::ostringstream oss;
+    int label_id = static_cast<int>(labels_a[i]);
+    std::string class_label =
+        (label_id >= 0 && label_id < coco_class_names.size())
+            ? coco_class_names[label_id]
+            : "unknown";
+    oss << class_label << ": " << std::fixed << std::setprecision(1)
+        << 100.f * scores_a[i];
+    std::string label_text = oss.str();
+
+    // Dynamic font scale based on image and box size
+    float box_height = y2 - y1;
+    float image_height = static_cast<float>(image.rows);
+
+    // Compute relative size of box wrt image
+    float rel_height = box_height / image_height;
+
+    // Scale font linearly between 0.4 and 1.0
+    float font_scale = std::clamp(0.2f + rel_height * 1.0f, 0.2f, 0.8f);
+    int baseline = 0;
+    int font_face = cv::FONT_HERSHEY_SIMPLEX;
+    int font_thickness = 1;
+
+    // Get text size for background box
+    cv::Size text_size = cv::getTextSize(label_text, font_face, font_scale,
+                                         font_thickness, &baseline);
+
+    // Background for better visibility (optional)
+    cv::rectangle(image, cv::Point(x1, y1),
+                  cv::Point(x1 + text_size.width, y1 + text_size.height + 5),
+                  cv::Scalar(0, 0, 255), cv::FILLED);
+
+    // Draw text in white
+    cv::putText(image, label_text, cv::Point(x1, y1 + text_size.height + 3),
+                font_face, font_scale, cv::Scalar(255, 255, 255),
+                font_thickness, cv::LINE_AA);
   }
 }
 
