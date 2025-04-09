@@ -255,6 +255,12 @@ int main(int argc, char *argv[]) {
       .help("Path to libdeformable_attention_plugin.so")
       .default_value(std::string("/home/bryan/src/Co-DETR-TensorRT/codetr/csrc/"
                                  "build/libdeformable_attention_plugin.so"));
+
+  program.add_argument("--benchmark-iterations")
+      .help("Number of times to run model inference for benchmarking")
+      .default_value(10)
+      .scan<'i', int>();
+
   try {
     program.parse_args(argc, argv);
   } catch (const std::runtime_error &err) {
@@ -273,6 +279,7 @@ int main(int argc, char *argv[]) {
   int target_width = program.get<int>("--target-width");
   float score_threshold = program.get<float>("--score-threshold");
   float iou_threshold = program.get<float>("--iou-threshold");
+  int bench_iterations = program.get<int>("--benchmark-iterations");
 
   // Validate dtype
   if (dtype_str != "float16" && dtype_str != "float32") {
@@ -317,9 +324,6 @@ int main(int argc, char *argv[]) {
   img_masks = img_masks.to(torch::kCUDA).to(dtype);
 
   // Run inference
-  std::cout << "Running inference..." << std::endl;
-  auto start = std::chrono::high_resolution_clock::now();
-
   std::vector<torch::jit::IValue> inputs;
   inputs.push_back(batch_inputs);
   inputs.push_back(img_masks);
@@ -332,16 +336,12 @@ int main(int argc, char *argv[]) {
   // boxes: has shape (1,num_boxes,4) where 4 is (x1,y1,x2,y2)
   // scores: has shape (1,num_boxes)
   // labels: has shape (1,num_boxes)
+  std::cout << "Running inference..." << std::endl;
   auto output = model.forward(inputs).toTuple();
   auto boxes = output->elements()[0].toTensor().to(torch::kFloat32).cpu();
   auto scores = output->elements()[1].toTensor().to(torch::kFloat32).cpu();
   auto labels = output->elements()[2].toTensor().to(torch::kInt64).cpu();
-
-  auto end = std::chrono::high_resolution_clock::now();
-  auto duration =
-      std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-  std::cout << "Inference time: " << duration.count() << " ms" << std::endl;
-
+  std::cout << "Postprocessing detections..." << std::endl;
   // Postprocess predictions
   auto [final_boxes, final_scores, final_labels] = postprocess_predictions(
       boxes, scores, labels, scale, score_threshold, iou_threshold);
@@ -352,6 +352,24 @@ int main(int argc, char *argv[]) {
   // Save output image
   cv::imwrite(output_path, image);
   std::cout << "Output saved to: " << output_path << std::endl;
+
+  // Benchmark the model
+  std::cout << "Benchmarking over " << bench_iterations << " iterations..."
+            << std::endl;
+  double total_time_ms = 0.0;
+  for (int i = 0; i < bench_iterations; ++i) {
+    auto start_bench = std::chrono::high_resolution_clock::now();
+    model.forward(inputs);
+    auto end_bench = std::chrono::high_resolution_clock::now();
+    double bench_duration =
+        std::chrono::duration<double, std::milli>(end_bench - start_bench)
+            .count();
+    total_time_ms += bench_duration;
+  }
+
+  double avg_time_ms = total_time_ms / bench_iterations;
+  std::cout << "Average inference time: " << std::fixed << std::setprecision(2)
+            << avg_time_ms << "ms" << std::endl;
 
   return EXIT_SUCCESS;
 }
