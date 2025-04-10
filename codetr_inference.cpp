@@ -265,7 +265,7 @@ struct TensorInfo {
 size_t tensorInfoNumBytes(const TensorInfo &info) {
   size_t numel = 1;
   for (int i = 0; i < info.dims.nbDims; ++i) {
-    numel *= dims.d[i];
+    numel *= info.dims.d[i];
   }
   return numel * elementSize(info.dtype);
 }
@@ -323,10 +323,14 @@ run_trt_inference(nvinfer1::ICudaEngine *engine,
 
   for (int i = 0; i < nIO; ++i) {
     // double check whether getTensorName, and getTensorMode exists
-    const char *tName = engine->getTensorName(i);
+    const char *tName = engine->getIOTensorName(i);
     infos[i].name = tName;
-    infos[i].mode = engine->getTensorMode(tName);
-    // check getTensorMode == kINPUT or kOUTPUT.
+    infos[i].mode = engine->getTensorIOMode(tName);
+    if (i < 2) {
+      assert(infos[i].mode == nvinfer1::TensorIOMode::kINPUT);
+    } else {
+      assert(infos[i].mode == nvinfer1::TensorIOMode::kOUTPUT);
+    }
     infos[i].dtype = engine->getTensorDataType(tName);
     infos[i].dims = engine->getTensorShape(tName);
 
@@ -350,14 +354,18 @@ run_trt_inference(nvinfer1::ICudaEngine *engine,
     cudaMemcpy(deviceBuffers[1], input1_host.data_ptr(), in1_bytes, cudaMemcpyHostToDevice);
   }
 
+  // 1. Create a CUDA stream
+  cudaStream_t stream;
+  cudaStreamCreate(&stream);
+
   // 6) Execute
-  // Note: We can pass a CUDA stream or do blocking sync with `executeV3()`.
-  // If you want async, use `executeV3(stream)`.
-  bool ok = context->executeV3(/*stream=*/nullptr);
+  // Expect batch size 1
+  bool ok = context->enqueueV3(stream);
   if (!ok) {
-    context->destroy();
     throw std::runtime_error("TensorRT executeV3 failed!");
   }
+  cudaStreamSynchronize(stream);
+  cudaStreamDestroy(stream);
 
   // 7) Copy outputs => CPU Tensors
   // We'll assume i=2 => boxes, i=3 => scores, i=4 => labels
@@ -380,7 +388,6 @@ run_trt_inference(nvinfer1::ICudaEngine *engine,
   for (int i = 0; i < nIO; ++i) {
     cudaFree(deviceBuffers[i]);
   }
-  context->destroy();
 
   return std::make_tuple(out_boxes, out_scores, out_labels);
 }
