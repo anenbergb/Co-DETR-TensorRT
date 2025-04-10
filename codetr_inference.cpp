@@ -371,9 +371,9 @@ run_trt_inference(nvinfer1::ICudaEngine *engine,
 
   // We'll assume i=2 => boxes, i=3 => scores, i=4 => labels
   auto out_boxes =
-      torch::empty(dimsToVector(infos[2].dims), torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32));
+      torch::empty(dimsToVector(infos[2].dims), torch::TensorOptions().device(torch::kCPU).dtype(input0_host.dtype()));
   auto out_scores =
-      torch::empty(dimsToVector(infos[3].dims), torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32));
+      torch::empty(dimsToVector(infos[3].dims), torch::TensorOptions().device(torch::kCPU).dtype(input0_host.dtype()));
   auto out_labels =
       torch::empty(dimsToVector(infos[4].dims), torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt64));
 
@@ -381,15 +381,28 @@ run_trt_inference(nvinfer1::ICudaEngine *engine,
   auto num_bytes_scores = tensorInfoNumBytes(infos[3]);
   auto num_bytes_labels = tensorInfoNumBytes(infos[4]);
 
-  cudaMemcpy(out_boxes.data_ptr(), deviceBuffers[2], num_bytes_boxes, cudaMemcpyDeviceToHost);
-  cudaMemcpy(out_scores.data_ptr(), deviceBuffers[3], num_bytes_scores, cudaMemcpyDeviceToHost);
-  cudaMemcpy(out_labels.data_ptr(), deviceBuffers[4], num_bytes_labels, cudaMemcpyDeviceToHost);
+  cudaError_t err;
+  err = cudaMemcpy(out_boxes.data_ptr(), deviceBuffers[2], num_bytes_boxes, cudaMemcpyDeviceToHost);
+  if (err != cudaSuccess) {
+    std::cerr << "cudaMemcpy for boxes failed: " << cudaGetErrorString(err) << std::endl;
+  }
+  err = cudaMemcpy(out_scores.data_ptr(), deviceBuffers[3], num_bytes_scores, cudaMemcpyDeviceToHost);
+  if (err != cudaSuccess) {
+    std::cerr << "cudaMemcpy for scores failed: " << cudaGetErrorString(err) << std::endl;
+  }
+  err = cudaMemcpy(out_labels.data_ptr(), deviceBuffers[4], num_bytes_labels, cudaMemcpyDeviceToHost);
+  if (err != cudaSuccess) {
+    std::cerr << "cudaMemcpy for labels failed: " << cudaGetErrorString(err) << std::endl;
+  }
+
+  auto out_boxes_fp32 = out_boxes.to(torch::kFloat32);
+  auto out_scores_fp32 = out_scores.to(torch::kFloat32);
 
   for (int i = 0; i < nIO; ++i) {
     cudaFree(deviceBuffers[i]);
   }
 
-  return std::make_tuple(out_boxes, out_scores, out_labels);
+  return std::make_tuple(out_boxes_fp32, out_scores_fp32, out_labels);
 }
 
 // Helper function to check if a string ends with a specific suffix
@@ -447,7 +460,7 @@ int main(int argc, char *argv[]) {
   // Add argument for TensorRT logging verbosity
   program.add_argument("--trt-verbosity")
       .help("TensorRT logging verbosity: 'warning', 'info', or 'verbose'")
-      .default_value(std::string("warning"))
+      .default_value(nvinfer1::ILogger::Severity::kWARNING)
       .action([](const std::string &value) {
         static const std::unordered_map<std::string, nvinfer1::ILogger::Severity> severity_map = {
             {"warning", nvinfer1::ILogger::Severity::kWARNING},
