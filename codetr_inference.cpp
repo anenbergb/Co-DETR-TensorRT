@@ -15,36 +15,21 @@
 #include <vector>
 
 const std::vector<std::string> coco_class_names = {
-    "person",        "bicycle",      "car",
-    "motorcycle",    "airplane",     "bus",
-    "train",         "truck",        "boat",
-    "traffic_light", "fire_hydrant", "stop_sign",
-    "parking_meter", "bench",        "bird",
-    "cat",           "dog",          "horse",
-    "sheep",         "cow",          "elephant",
-    "bear",          "zebra",        "giraffe",
-    "backpack",      "umbrella",     "handbag",
-    "tie",           "suitcase",     "frisbee",
-    "skis",          "snowboard",    "sports_ball",
-    "kite",          "baseball_bat", "baseball_glove",
-    "skateboard",    "surfboard",    "tennis_racket",
-    "bottle",        "wine_glass",   "cup",
-    "fork",          "knife",        "spoon",
-    "bowl",          "banana",       "apple",
-    "sandwich",      "orange",       "broccoli",
-    "carrot",        "hot_dog",      "pizza",
-    "donut",         "cake",         "chair",
-    "couch",         "potted_plant", "bed",
-    "dining_table",  "toilet",       "tv",
-    "laptop",        "mouse",        "remote",
-    "keyboard",      "cell_phone",   "microwave",
-    "oven",          "toaster",      "sink",
-    "refrigerator",  "book",         "clock",
-    "vase",          "scissors",     "teddy_bear",
-    "hair_drier",    "toothbrush"};
+    "person",         "bicycle",    "car",           "motorcycle",    "airplane",     "bus",           "train",
+    "truck",          "boat",       "traffic_light", "fire_hydrant",  "stop_sign",    "parking_meter", "bench",
+    "bird",           "cat",        "dog",           "horse",         "sheep",        "cow",           "elephant",
+    "bear",           "zebra",      "giraffe",       "backpack",      "umbrella",     "handbag",       "tie",
+    "suitcase",       "frisbee",    "skis",          "snowboard",     "sports_ball",  "kite",          "baseball_bat",
+    "baseball_glove", "skateboard", "surfboard",     "tennis_racket", "bottle",       "wine_glass",    "cup",
+    "fork",           "knife",      "spoon",         "bowl",          "banana",       "apple",         "sandwich",
+    "orange",         "broccoli",   "carrot",        "hot_dog",       "pizza",        "donut",         "cake",
+    "chair",          "couch",      "potted_plant",  "bed",           "dining_table", "toilet",        "tv",
+    "laptop",         "mouse",      "remote",        "keyboard",      "cell_phone",   "microwave",     "oven",
+    "toaster",        "sink",       "refrigerator",  "book",          "clock",        "vase",          "scissors",
+    "teddy_bear",     "hair_drier", "toothbrush"};
 
-std::tuple<torch::Tensor, torch::Tensor, float>
-preprocess_image(const cv::Mat &image, int target_height, int target_width) {
+std::tuple<torch::Tensor, torch::Tensor, float> preprocess_image(const cv::Mat &image, int target_height,
+                                                                 int target_width) {
   // Convert BGR to RGB
   cv::Mat rgb_image;
   cv::cvtColor(image, rgb_image, cv::COLOR_BGR2RGB);
@@ -52,8 +37,8 @@ preprocess_image(const cv::Mat &image, int target_height, int target_width) {
   // Resize while maintaining aspect ratio
   int orig_height = rgb_image.rows;
   int orig_width = rgb_image.cols;
-  float scale = std::min(static_cast<float>(target_width) / orig_width,
-                         static_cast<float>(target_height) / orig_height);
+  float scale =
+      std::min(static_cast<float>(target_width) / orig_width, static_cast<float>(target_height) / orig_height);
 
   int new_width = static_cast<int>(orig_width * scale);
   int new_height = static_cast<int>(orig_height * scale);
@@ -75,13 +60,11 @@ preprocess_image(const cv::Mat &image, int target_height, int target_width) {
 
   // Convert to torch tensors
   auto options = torch::TensorOptions().dtype(torch::kFloat32);
-  torch::Tensor image_tensor = torch::from_blob(
-      float_image.data, {target_height, target_width, 3}, options);
+  torch::Tensor image_tensor = torch::from_blob(float_image.data, {target_height, target_width, 3}, options);
   image_tensor = image_tensor.permute({2, 0, 1}); // HWC -> CHW
   image_tensor = image_tensor.unsqueeze(0);       // Add batch dimension
 
-  torch::Tensor mask_tensor =
-      torch::from_blob(mask.data, {1, target_height, target_width}, options);
+  torch::Tensor mask_tensor = torch::from_blob(mask.data, {1, target_height, target_width}, options);
 
   // Define normalization parameters
   std::vector<float> mean = {123.675, 116.28, 103.53};
@@ -100,8 +83,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 postprocess_predictions(const torch::Tensor &batch_boxes,  // (1,300,4)
                         const torch::Tensor &batch_scores, // (1,300)
                         const torch::Tensor &batch_labels, // (1,300)
-                        float scale, float score_threshold = 0.3,
-                        float iou_threshold = 0.5) {
+                        float scale, float score_threshold = 0.3, float iou_threshold = 0.5) {
 
   // Batch size must be 1
   assert(batch_boxes.size(0) == 1);
@@ -128,8 +110,7 @@ postprocess_predictions(const torch::Tensor &batch_boxes,  // (1,300,4)
   return std::make_tuple(valid_boxes, valid_scores, valid_labels);
 }
 
-void draw_boxes(cv::Mat &image, const torch::Tensor &boxes,
-                const torch::Tensor &scores, const torch::Tensor &labels) {
+void draw_boxes(cv::Mat &image, const torch::Tensor &boxes, const torch::Tensor &scores, const torch::Tensor &labels) {
   auto boxes_a = boxes.accessor<float, 2>();
   auto scores_a = scores.accessor<float, 1>();
   auto labels_a = labels.accessor<int64_t, 1>();
@@ -144,18 +125,14 @@ void draw_boxes(cv::Mat &image, const torch::Tensor &boxes,
     float y2 = boxes_a[i][3];
 
     // Draw red rectangle
-    cv::rectangle(image, cv::Point(x1, y1), cv::Point(x2, y2), box_color,
-                  thickness);
+    cv::rectangle(image, cv::Point(x1, y1), cv::Point(x2, y2), box_color, thickness);
 
     // Format label text: "class 12: 90.5"
     std::ostringstream oss;
     int label_id = static_cast<int>(labels_a[i]);
     std::string class_label =
-        (label_id >= 0 && label_id < coco_class_names.size())
-            ? coco_class_names[label_id]
-            : "unknown";
-    oss << class_label << ": " << std::fixed << std::setprecision(1)
-        << 100.f * scores_a[i];
+        (label_id >= 0 && label_id < coco_class_names.size()) ? coco_class_names[label_id] : "unknown";
+    oss << class_label << ": " << std::fixed << std::setprecision(1) << 100.f * scores_a[i];
     std::string label_text = oss.str();
 
     // Dynamic font scale based on image and box size
@@ -172,18 +149,15 @@ void draw_boxes(cv::Mat &image, const torch::Tensor &boxes,
     int font_thickness = 1;
 
     // Get text size for background box
-    cv::Size text_size = cv::getTextSize(label_text, font_face, font_scale,
-                                         font_thickness, &baseline);
+    cv::Size text_size = cv::getTextSize(label_text, font_face, font_scale, font_thickness, &baseline);
 
     // Background for better visibility (optional)
-    cv::rectangle(image, cv::Point(x1, y1),
-                  cv::Point(x1 + text_size.width, y1 + text_size.height + 5),
+    cv::rectangle(image, cv::Point(x1, y1), cv::Point(x1 + text_size.width, y1 + text_size.height + 5),
                   cv::Scalar(0, 0, 255), cv::FILLED);
 
     // Draw text in white
-    cv::putText(image, label_text, cv::Point(x1, y1 + text_size.height + 3),
-                font_face, font_scale, cv::Scalar(255, 255, 255),
-                font_thickness, cv::LINE_AA);
+    cv::putText(image, label_text, cv::Point(x1, y1 + text_size.height + 3), font_face, font_scale,
+                cv::Scalar(255, 255, 255), font_thickness, cv::LINE_AA);
   }
 }
 
@@ -214,16 +188,15 @@ bool load_tensorrt_plugin(std::string &trt_plugin_path) {
   return true;
 }
 
-nvinfer1::ICudaEngine *load_trt_engine(const std::string &engine_path,
-                                       nvinfer1::ILogger &logger) {
+nvinfer1::ICudaEngine *load_trt_engine(const std::string &engine_path, nvinfer1::ILogger &logger) {
   std::cout << "Loading TensorRT engine from: " << engine_path << std::endl;
-  // 1. Read engine file into memory
+  // 1) Read engine file from disk
   std::ifstream file(engine_path, std::ios::binary | std::ios::ate);
   if (!file.good()) {
     std::cerr << "Error opening engine file: " << engine_path << std::endl;
     return nullptr;
   }
-  const size_t file_size = file.tellg();
+  size_t file_size = file.tellg();
   file.seekg(0, std::ios::beg);
   std::vector<char> engine_data(file_size);
   file.read(engine_data.data(), file_size);
@@ -232,38 +205,25 @@ nvinfer1::ICudaEngine *load_trt_engine(const std::string &engine_path,
   // There should exist a function to read the engine file
   // std::vector<char> engine_data = nvinfer1::readModelFromFile(engine_path);
 
-  std::cout << "Creating TensorRT runtime and deserializing engine..."
-            << std::endl;
   // 2. Create runtime & deserialize engine
+  std::cout << "Creating TensorRT runtime and deserializing engine..." << std::endl;
+
   nvinfer1::IRuntime *runtime = nvinfer1::createInferRuntime(logger);
   if (!runtime) {
     std::cerr << "Failed to create InferRuntime." << std::endl;
     return nullptr;
   }
-  nvinfer1::ICudaEngine *engine =
-      runtime->deserializeCudaEngine(engine_data.data(), file_size);
+  nvinfer1::ICudaEngine *engine = runtime->deserializeCudaEngine(engine_data.data(), file_size);
   if (!engine) {
     std::cerr << "Failed to deserialize CUDA engine." << std::endl;
-    runtime->destroy();
-    return nullptr;
   }
-
-  // If you only create one engine, you can destroy runtime here
-  runtime->destroy();
   return engine;
-}
-
-inline size_t volume(const std::vector<int64_t> &dims) {
-  size_t v = 1;
-  for (auto d : dims)
-    v *= d;
-  return v;
 }
 
 /**
  * Utility: Convert nvinfer1::Dims to vector<int64_t>
  */
-std::vector<int64_t> dimsToVector(const nvinfer1::Dims &d) {
+inline std::vector<int64_t> dimsToVector(const nvinfer1::Dims &d) {
   std::vector<int64_t> shape(d.nbDims);
   for (int i = 0; i < d.nbDims; ++i) {
     shape[i] = d.d[i];
@@ -271,13 +231,7 @@ std::vector<int64_t> dimsToVector(const nvinfer1::Dims &d) {
   return shape;
 }
 
-/**
- * Returns size in bytes for a given TRT data type:
- * - kFLOAT -> 4
- * - kHALF  -> 2
- * - kINT32 -> 4
- * - etc.
- */
+// Convert TRT DataType to size in bytes
 inline size_t elementSize(nvinfer1::DataType dtype) {
   switch (dtype) {
   case nvinfer1::DataType::kFLOAT:
@@ -288,21 +242,39 @@ inline size_t elementSize(nvinfer1::DataType dtype) {
     return 1;
   case nvinfer1::DataType::kINT32:
     return 4;
-  case nvinfer1::DataType::kBOOL:
-    return 1;
   case nvinfer1::DataType::kINT64:
     return 8;
+  case nvinfer1::DataType::kBOOL:
+    return 1;
   default:
-    throw std::runtime_error("Unsupported DataType in elementSize()");
+    throw std::runtime_error("Unsupported TRT DataType in elementSize()");
   }
+}
+
+struct TensorInfo {
+  std::string name;
+  nvinfer1::TensorIOMode mode; // input or output
+  nvinfer1::DataType dtype;
+  nvinfer1::Dims dims;
+  torch::Tensor cpu_data; // host staging, if needed
+};
+
+/**
+ * Utility to compute the number of bytes for a TRT tensor
+ */
+size_t tensorInfoNumBytes(const TensorInfo &info) {
+  size_t numel = 1;
+  for (int i = 0; i < info.dims.nbDims; ++i) {
+    numel *= dims.d[i];
+  }
+  return numel * elementSize(info.dtype);
 }
 
 /**
  * Utility to create a CPU torch::Tensor of the correct dtype
  * from a Torch tensor which might be on GPU or in a different dtype.
  */
-torch::Tensor convertToTRTDtype(const torch::Tensor &t,
-                                nvinfer1::DataType trt_dtype) {
+torch::Tensor convertToTRTDtype(const torch::Tensor &t, nvinfer1::DataType trt_dtype) {
   switch (trt_dtype) {
   case nvinfer1::DataType::kFLOAT:
     return t.to(torch::kFloat32).contiguous().cpu();
@@ -313,8 +285,7 @@ torch::Tensor convertToTRTDtype(const torch::Tensor &t,
   case nvinfer1::DataType::kINT64:
     return t.to(torch::kInt64).contiguous().cpu();
   default:
-    throw std::runtime_error(
-        "Unsupported or unexpected TRT DataType in convertToTRTDtype()");
+    throw std::runtime_error("Unsupported or unexpected TRT DataType in convertToTRTDtype()");
   }
 }
 
@@ -323,166 +294,100 @@ torch::Tensor convertToTRTDtype(const torch::Tensor &t,
  * that are shaped e.g. [1,3,H,W] and [1,H,W].
  * The engine is expected to produce (boxes, scores, labels).
  *
- * Steps:
- * 1) Create an ExecutionContext
- * 2) Determine binding indices
- * 3) Convert inputs to correct dtype (float32/float16)
- * 4) Allocate device buffers
- * 5) Copy inputs -> GPU
- * 6) context->executeV2
- * 7) Copy outputs -> host
- * 8) Convert to torch::Tensor
- * 9) Cleanup
+ * Assume that batch_inputs and img_mask are on CPU
+ *
  */
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 run_trt_inference(nvinfer1::ICudaEngine *engine,
-                  const torch::Tensor &batch_inputs, // shape [1,3,H,W]
-                  const torch::Tensor &img_masks)    // shape [1,H,W]
-{
-  // 1. Create execution context
+                  const torch::Tensor &batch_inputs, // [1,3,H,W]
+                  const torch::Tensor &img_masks     // [1,H,W]
+) {
+  // 1) Create ExecutionContext
   nvinfer1::IExecutionContext *context = engine->createExecutionContext();
   if (!context) {
-    throw std::runtime_error("Failed to create ExecutionContext!");
+    throw std::runtime_error("Failed to create IExecutionContext");
   }
 
-  // Suppose your engine has 5 bindings:
-  // 0: input0 -> batch_inputs
-  // 1: input1 -> img_masks
-  // 2: out_boxes
-  // 3: out_scores
-  // 4: out_labels
-  int inputIndex0 = 0;
-  int inputIndex1 = 1;
-  int outIndex0 = 2;
-  int outIndex1 = 3;
-  int outIndex2 = 4;
+  // 2) Query the engine for I/O tensor info
+  int nIO = engine->getNbIOTensors();
+  std::cout << "Engine has " << nIO << " I/O tensors." << std::endl;
 
-  // By default Co-DETR export doesn't use dynamic shapes
-  // but if you do, you can set the binding dimensions here
-  // int H = batch_inputs.size(2);
-  // int W = batch_inputs.size(3);
-  // context->setBindingDimensions(inputIndex0, nvinfer1::Dims4(1,3,H,W));
-  // context->setBindingDimensions(inputIndex1, nvinfer1::Dims3(1,H,W));
+  // We'll store device pointers + metadata for each I/O tensor
+  // i=0 => batch_inputs
+  // i=1 => img_masks
+  // i=2 => boxes
+  // i=3 => scores
+  // i=4 => labels
+  std::vector<void *> deviceBuffers(nIO, nullptr);
+  std::vector<TensorInfo> infos(nIO);
 
-  // 2. Inspect engine data types
-  nvinfer1::DataType in0_dtype = engine->getBindingDataType(inputIndex0);
-  nvinfer1::DataType in1_dtype = engine->getBindingDataType(inputIndex1);
-  nvinfer1::DataType out0_dtype = engine->getBindingDataType(outIndex0);
-  nvinfer1::DataType out1_dtype = engine->getBindingDataType(outIndex1);
-  nvinfer1::DataType out2_dtype = engine->getBindingDataType(outIndex2);
+  for (int i = 0; i < nIO; ++i) {
+    // double check whether getTensorName, and getTensorMode exists
+    const char *tName = engine->getTensorName(i);
+    infos[i].name = tName;
+    infos[i].mode = engine->getTensorMode(tName);
+    // check getTensorMode == kINPUT or kOUTPUT.
+    infos[i].dtype = engine->getTensorDataType(tName);
+    infos[i].dims = engine->getTensorShape(tName);
 
-  // 3. Convert input Tensors to match TRT dtype
-  auto in0_host = convertToTRTDtype(batch_inputs, in0_dtype);
-  auto in1_host = convertToTRTDtype(img_masks, in1_dtype);
-
-  // 4. Figure out binding dims (static or dynamic)
-  //    For dynamic shape, do it after setBindingDimensions()
-  auto bdim_in0 = context->getBindingDimensions(inputIndex0);
-  auto bdim_in1 = context->getBindingDimensions(inputIndex1);
-  auto bdim_out0 = context->getBindingDimensions(outIndex0);
-  auto bdim_out1 = context->getBindingDimensions(outIndex1);
-  auto bdim_out2 = context->getBindingDimensions(outIndex2);
-
-  // Convert to vector<int64_t> for Torch
-  auto shape_in0 = dimsToVector(bdim_in0);   // e.g. [1,3,H,W]
-  auto shape_in1 = dimsToVector(bdim_in1);   // e.g. [1,H,W]
-  auto shape_out0 = dimsToVector(bdim_out0); // e.g. [1,300,4]
-  auto shape_out1 = dimsToVector(bdim_out1); // e.g. [1,300]
-  auto shape_out2 = dimsToVector(bdim_out2); // e.g. [1,300]
-
-  // 5. Compute the memory sizes (in bytes)
-  size_t in0_numel = in0_host.numel();
-  size_t in1_numel = in1_host.numel();
-  size_t in0_bytes = in0_numel * elementSize(in0_dtype);
-  size_t in1_bytes = in1_numel * elementSize(in1_dtype);
-
-  // For outputs, we rely on the shape from binding dims
-  auto out0_numel = 1ULL;
-  for (auto d : shape_out0)
-    out0_numel *= d;
-  auto out1_numel = 1ULL;
-  for (auto d : shape_out1)
-    out1_numel *= d;
-  auto out2_numel = 1ULL;
-  for (auto d : shape_out2)
-    out2_numel *= d;
-
-  size_t out0_bytes = out0_numel * elementSize(out0_dtype);
-  size_t out1_bytes = out1_numel * elementSize(out1_dtype);
-  size_t out2_bytes = out2_numel * elementSize(out2_dtype);
-
-  // 6. Allocate device buffers
-  std::vector<void *> deviceBuffers(engine->getNbBindings(), nullptr);
-  cudaMalloc(&deviceBuffers[inputIndex0], in0_bytes);
-  cudaMalloc(&deviceBuffers[inputIndex1], in1_bytes);
-  cudaMalloc(&deviceBuffers[outIndex0], out0_bytes);
-  cudaMalloc(&deviceBuffers[outIndex1], out1_bytes);
-  cudaMalloc(&deviceBuffers[outIndex2], out2_bytes);
-
-  // 7. Copy inputs to device
-  cudaMemcpy(deviceBuffers[inputIndex0], in0_host.data_ptr(), in0_bytes,
-             cudaMemcpyHostToDevice);
-
-  cudaMemcpy(deviceBuffers[inputIndex1], in1_host.data_ptr(), in1_bytes,
-             cudaMemcpyHostToDevice);
-
-  // 8. Run inference
-  context->executeV2(deviceBuffers.data());
-
-  // 9. Copy outputs back
-  std::vector<char> out0_host_vec(out0_bytes);
-  std::vector<char> out1_host_vec(out1_bytes);
-  std::vector<char> out2_host_vec(out2_bytes);
-
-  cudaMemcpy(out0_host_vec.data(), deviceBuffers[outIndex0], out0_bytes,
-             cudaMemcpyDeviceToHost);
-  cudaMemcpy(out1_host_vec.data(), deviceBuffers[outIndex1], out1_bytes,
-             cudaMemcpyDeviceToHost);
-  cudaMemcpy(out2_host_vec.data(), deviceBuffers[outIndex2], out2_bytes,
-             cudaMemcpyDeviceToHost);
-
-  // 10. Convert them to torch::Tensor
-  // For now, assume boxes & scores are float, labels are int
-  // but it depends on your engine.
-  auto out_boxes = torch::empty(
-      shape_out0,
-      torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32));
-  auto out_scores = torch::empty(
-      shape_out1,
-      torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32));
-  auto out_labels = torch::empty(
-      shape_out2,
-      torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt64));
-
-  // Copy memory into those Tensors
-  // out_boxes
-  std::memcpy(out_boxes.data_ptr(), out0_host_vec.data(), out0_bytes);
-
-  // out_scores
-  std::memcpy(out_scores.data_ptr(), out1_host_vec.data(), out1_bytes);
-
-  // out_labels
-  if (out2_dtype == nvinfer1::DataType::kINT32) {
-    std::cout << "TensorRT label output is int32, converting to int64"
-              << std::endl;
-    auto *int32_ptr = reinterpret_cast<int32_t *>(out2_host_vec.data());
-    auto num_labels = out2_numel;
-    auto out_data = out_labels.data_ptr<int64_t>();
-    for (size_t i = 0; i < num_labels; i++) {
-      out_data[i] = static_cast<int64_t>(int32_ptr[i]);
-    }
-  } else if (out2_dtype == nvinfer1::DataType::kINT64) {
-    // direct memcpy
-    std::memcpy(out_labels.data_ptr(), out2_host_vec.data(), out2_bytes);
+    // For each I/O, allocate GPU memory
+    size_t totalBytes = tensorInfoNumBytes(infos[i]);
+    cudaMalloc(&deviceBuffers[i], totalBytes);
+    // Bind device pointer:
+    context->setTensorAddress(tName, deviceBuffers[i]);
   }
 
-  // 11. Cleanup device buffers
-  for (void *buf : deviceBuffers) {
-    cudaFree(buf);
+  // convert inputs to TensorRT type (e.g. float16)
+  // i=0 => batch_inputs
+  auto input0_host = convertToTRTDtype(batch_inputs, infos[0].dtype);
+  // i=1 => img_masks
+  auto input1_host = convertToTRTDtype(img_masks, infos[1].dtype);
+  // Copy inputs => device
+  {
+    size_t in0_bytes = tensorInfoNumBytes(infos[0]);
+    cudaMemcpy(deviceBuffers[0], input0_host.data_ptr(), in0_bytes, cudaMemcpyHostToDevice);
+    size_t in1_bytes = tensorInfoNumBytes(infos[0]);
+    cudaMemcpy(deviceBuffers[1], input1_host.data_ptr(), in1_bytes, cudaMemcpyHostToDevice);
+  }
+
+  // 6) Execute
+  // Note: We can pass a CUDA stream or do blocking sync with `executeV3()`.
+  // If you want async, use `executeV3(stream)`.
+  bool ok = context->executeV3(/*stream=*/nullptr);
+  if (!ok) {
+    context->destroy();
+    throw std::runtime_error("TensorRT executeV3 failed!");
+  }
+
+  // 7) Copy outputs => CPU Tensors
+  // We'll assume i=2 => boxes, i=3 => scores, i=4 => labels
+  auto out_boxes =
+      torch::empty(dimsToVector(infos[2].dims), torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32));
+  auto out_scores =
+      torch::empty(dimsToVector(infos[3].dims), torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32));
+  auto out_labels =
+      torch::empty(dimsToVector(infos[4].dims), torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt64));
+
+  auto num_bytes_boxes = tensorInfoNumBytes(infos[2]);
+  auto num_bytes_scores = tensorInfoNumBytes(infos[3]);
+  auto num_bytes_labels = tensorInfoNumBytes(infos[4]);
+
+  cudaMemcpy(out_boxes.data_ptr(), deviceBuffers[2], num_bytes_boxes, cudaMemcpyDeviceToHost);
+  cudaMemcpy(out_scores.data_ptr(), deviceBuffers[3], num_bytes_scores, cudaMemcpyDeviceToHost);
+  cudaMemcpy(out_labels.data_ptr(), deviceBuffers[4], num_bytes_labels, cudaMemcpyDeviceToHost);
+
+  // 8) Cleanup
+  for (int i = 0; i < nIO; ++i) {
+    cudaFree(deviceBuffers[i]);
   }
   context->destroy();
 
   return std::make_tuple(out_boxes, out_scores, out_labels);
+}
+
+// Helper function to check if a string ends with a specific suffix
+bool ends_with(const std::string &str, const std::string &suffix) {
+  return str.size() >= suffix.size() && str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -491,16 +396,11 @@ int main(int argc, char *argv[]) {
 
   program.add_argument("--model")
       .help("Path to the TorchScript model file")
-      .default_value(
-          std::string("/home/bryan/expr/co-detr/export/codetr_fp16/codetr.ts"));
+      .default_value(std::string("/home/bryan/expr/co-detr/export/codetr_fp16/codetr.ts"));
 
-  program.add_argument("--input")
-      .help("Path to the input image")
-      .default_value(std::string("assets/demo.jpg"));
+  program.add_argument("--input").help("Path to the input image").default_value(std::string("assets/demo.jpg"));
 
-  program.add_argument("--output")
-      .help("Path to save the output image")
-      .default_value(std::string("output.jpg"));
+  program.add_argument("--output").help("Path to save the output image").default_value(std::string("output.jpg"));
 
   program.add_argument("--dtype")
       .help("Data type for inference (float16 or float32). The model must be "
@@ -559,8 +459,7 @@ int main(int argc, char *argv[]) {
 
   // Validate dtype
   if (dtype_str != "float16" && dtype_str != "float32") {
-    std::cerr << "Error: dtype must be either 'float16' or 'float32'"
-              << std::endl;
+    std::cerr << "Error: dtype must be either 'float16' or 'float32'" << std::endl;
     return EXIT_FAILURE;
   }
 
@@ -571,21 +470,21 @@ int main(int argc, char *argv[]) {
 
   bool is_tensorrt_engine = false;
   // Check if the model file is TorchScript or TensorRT Engine
-  if (model_path.ends_with(".ts")) {
-    std::cout << "We assume the model is TorchScript because it ends with '.ts'"
+  if (ends_with(model_path, ".ts")) {
+    std::cout << "Model is likely TorchScript" << std::endl;
+  } else if (ends_with(model_path, ".engine")) {
+    std::cout << "Model is likely a Serialized TensorRT Engine" << std::endl;
+  } else {
+    std::cerr << "Error: Unsupported model file extension. Expected '.ts' or "
+                 "'.engine'"
               << std::endl;
-  } else if (model_path.ends_with(".engine")) {
-    is_tensorrt_engine = true;
-    std::cout << "We assume the model is a Serialized TensorRT Engine because "
-                 "it ends with '.engine'"
-              << std::endl;
+    return EXIT_FAILURE;
   }
 
   torch_tensorrt::set_device(0);
 
   // Convert dtype string to torch dtype
-  torch::Dtype dtype =
-      (dtype_str == "float16") ? torch::kFloat16 : torch::kFloat32;
+  torch::Dtype dtype = (dtype_str == "float16") ? torch::kFloat16 : torch::kFloat32;
 
   // Load image
   std::cout << "Loading image from: " << image_path << std::endl;
@@ -597,33 +496,32 @@ int main(int argc, char *argv[]) {
   }
 
   // Preprocess image
-  auto [batch_inputs, img_masks, scale] =
-      preprocess_image(image, target_height, target_width);
-  batch_inputs = batch_inputs.to(torch::kCUDA).to(dtype);
-  img_masks = img_masks.to(torch::kCUDA).to(dtype);
+  auto [batch_inputs, img_masks, scale] = preprocess_image(image, target_height, target_width);
+  batch_inputs = batch_inputs.to(dtype);
+  img_masks = img_masks.to(dtype);
 
+  torch::Tensor boxes, scores, labels;
   if (is_tensorrt_engine) {
-    nvinfer1::ICudaEngine *engine = load_trt_engine(engine_path, logger);
+    Logger logger;
+    nvinfer1::ICudaEngine *engine = load_trt_engine(model_path, logger);
     if (!engine) {
       return EXIT_FAILURE;
     }
-    auto [boxes, scores, labels] =
-        run_trt_inference(engine, batch_inputs, img_masks);
+    std::tie(boxes, scores, labels) = run_trt_inference(engine, batch_inputs, img_masks);
 
   } else {
     // Load model
     std::cout << "Loading model from: " << model_path << std::endl;
 
     // Load the model using torch::jit::load with CUDA support
-    torch::jit::script::Module model =
-        torch::jit::load(model_path, torch::kCUDA);
+    torch::jit::script::Module model = torch::jit::load(model_path, torch::kCUDA);
     model.to(torch::kCUDA);
     model.to(dtype);
     model.eval();
     // Run inference
     std::vector<torch::jit::IValue> inputs;
-    inputs.push_back(batch_inputs);
-    inputs.push_back(img_masks);
+    inputs.push_back(batch_inputs.to(torch::kCUDA));
+    inputs.push_back(img_masks.to(torch::kCUDA));
     // Co-DETR model. We assume batch size is 1.
     // The model expects two inputs:
     //     batch_inputs (Tensor): has shape (1, 3, H, W) RGB ordered channels
@@ -634,15 +532,15 @@ int main(int argc, char *argv[]) {
     // labels: has shape (1,num_boxes)
     std::cout << "Running inference..." << std::endl;
     auto output = model.forward(inputs).toTuple();
-    auto boxes = output->elements()[0].toTensor().to(torch::kFloat32).cpu();
-    auto scores = output->elements()[1].toTensor().to(torch::kFloat32).cpu();
-    auto labels = output->elements()[2].toTensor().to(torch::kInt64).cpu();
+    boxes = output->elements()[0].toTensor().to(torch::kFloat32).cpu();
+    scores = output->elements()[1].toTensor().to(torch::kFloat32).cpu();
+    labels = output->elements()[2].toTensor().to(torch::kInt64).cpu();
   }
 
   std::cout << "Postprocessing detections..." << std::endl;
   // Postprocess predictions
-  auto [final_boxes, final_scores, final_labels] = postprocess_predictions(
-      boxes, scores, labels, scale, score_threshold, iou_threshold);
+  auto [final_boxes, final_scores, final_labels] =
+      postprocess_predictions(boxes, scores, labels, scale, score_threshold, iou_threshold);
 
   // Draw boxes on original image
   draw_boxes(image, final_boxes, final_scores, final_labels);
