@@ -30,6 +30,7 @@ const std::vector<std::string> coco_class_names = {
 
 std::tuple<torch::Tensor, torch::Tensor, float> preprocess_image(const cv::Mat &image, int target_height,
                                                                  int target_width) {
+  std::cout << "Preprocessing image..." << std::endl;
   // Convert BGR to RGB
   cv::Mat rgb_image;
   cv::cvtColor(image, rgb_image, cv::COLOR_BGR2RGB);
@@ -59,12 +60,12 @@ std::tuple<torch::Tensor, torch::Tensor, float> preprocess_image(const cv::Mat &
   mask(cv::Rect(0, 0, new_width, new_height)) = 0;
 
   // Convert to torch tensors
-  auto options = torch::TensorOptions().dtype(torch::kFloat32);
-  torch::Tensor image_tensor = torch::from_blob(float_image.data, {target_height, target_width, 3}, options);
+  auto options = torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32);
+  torch::Tensor image_tensor = torch::from_blob(float_image.data, {target_height, target_width, 3}, options).clone();
   image_tensor = image_tensor.permute({2, 0, 1}); // HWC -> CHW
   image_tensor = image_tensor.unsqueeze(0);       // Add batch dimension
 
-  torch::Tensor mask_tensor = torch::from_blob(mask.data, {1, target_height, target_width}, options);
+  torch::Tensor mask_tensor = torch::from_blob(mask.data, {1, target_height, target_width}, options).clone();
 
   // Define normalization parameters
   std::vector<float> mean = {123.675, 116.28, 103.53};
@@ -161,17 +162,22 @@ void draw_boxes(cv::Mat &image, const torch::Tensor &boxes, const torch::Tensor 
   }
 }
 
-struct Logger : public nvinfer1::ILogger {
-  void log(Severity severity, const char *msg) noexcept override {
-    if (severity <= Severity::kWARNING) {
+class Logger : public nvinfer1::ILogger {
+public:
+  explicit Logger(Severity severity = Severity::kWARNING) : reportableSeverity(severity) {}
+
+  void log(Severity severity, char const *msg) noexcept override {
+    // Only log messages that are at or above 'reportableSeverity'
+    if (severity <= reportableSeverity) {
       std::cout << "[TRT] " << msg << std::endl;
     }
   }
+
+private:
+  Severity reportableSeverity;
 };
 
-bool load_tensorrt_plugin(std::string &trt_plugin_path) {
-  Logger logger;
-
+bool load_tensorrt_plugin(std::string &trt_plugin_path, nvinfer1::ILogger &logger) {
   if (!initLibNvInferPlugins(&logger, "")) {
     std::cerr << "Failed to initialize TensorRT plugins." << std::endl;
     return false;
@@ -302,13 +308,11 @@ run_trt_inference(nvinfer1::ICudaEngine *engine,
                   const torch::Tensor &batch_inputs, // [1,3,H,W]
                   const torch::Tensor &img_masks     // [1,H,W]
 ) {
-  // 1) Create ExecutionContext
   nvinfer1::IExecutionContext *context = engine->createExecutionContext();
   if (!context) {
     throw std::runtime_error("Failed to create IExecutionContext");
   }
 
-  // 2) Query the engine for I/O tensor info
   int nIO = engine->getNbIOTensors();
   std::cout << "Engine has " << nIO << " I/O tensors." << std::endl;
 
@@ -354,11 +358,9 @@ run_trt_inference(nvinfer1::ICudaEngine *engine,
     cudaMemcpy(deviceBuffers[1], input1_host.data_ptr(), in1_bytes, cudaMemcpyHostToDevice);
   }
 
-  // 1. Create a CUDA stream
   cudaStream_t stream;
   cudaStreamCreate(&stream);
 
-  // 6) Execute
   // Expect batch size 1
   bool ok = context->enqueueV3(stream);
   if (!ok) {
@@ -367,7 +369,6 @@ run_trt_inference(nvinfer1::ICudaEngine *engine,
   cudaStreamSynchronize(stream);
   cudaStreamDestroy(stream);
 
-  // 7) Copy outputs => CPU Tensors
   // We'll assume i=2 => boxes, i=3 => scores, i=4 => labels
   auto out_boxes =
       torch::empty(dimsToVector(infos[2].dims), torch::TensorOptions().device(torch::kCPU).dtype(torch::kFloat32));
@@ -384,7 +385,6 @@ run_trt_inference(nvinfer1::ICudaEngine *engine,
   cudaMemcpy(out_scores.data_ptr(), deviceBuffers[3], num_bytes_scores, cudaMemcpyDeviceToHost);
   cudaMemcpy(out_labels.data_ptr(), deviceBuffers[4], num_bytes_labels, cudaMemcpyDeviceToHost);
 
-  // 8) Cleanup
   for (int i = 0; i < nIO; ++i) {
     cudaFree(deviceBuffers[i]);
   }
@@ -444,6 +444,22 @@ int main(int argc, char *argv[]) {
       .default_value(10)
       .scan<'i', int>();
 
+  // Add argument for TensorRT logging verbosity
+  program.add_argument("--trt-verbosity")
+      .help("TensorRT logging verbosity: 'warning', 'info', or 'verbose'")
+      .default_value(std::string("warning"))
+      .action([](const std::string &value) {
+        static const std::unordered_map<std::string, nvinfer1::ILogger::Severity> severity_map = {
+            {"warning", nvinfer1::ILogger::Severity::kWARNING},
+            {"info", nvinfer1::ILogger::Severity::kINFO},
+            {"verbose", nvinfer1::ILogger::Severity::kVERBOSE}};
+        auto it = severity_map.find(value);
+        if (it == severity_map.end()) {
+          throw std::runtime_error("Invalid TensorRT verbosity level: " + value);
+        }
+        return it->second;
+      });
+
   try {
     program.parse_args(argc, argv);
   } catch (const std::runtime_error &err) {
@@ -464,13 +480,21 @@ int main(int argc, char *argv[]) {
   float iou_threshold = program.get<float>("--iou-threshold");
   int bench_iterations = program.get<int>("--benchmark-iterations");
 
+  // Parse the argument
+  nvinfer1::ILogger::Severity trt_severity = program.get<nvinfer1::ILogger::Severity>("--trt-verbosity");
+
+  // Pass the severity to the Logger
+  Logger logger(trt_severity);
+
   // Validate dtype
   if (dtype_str != "float16" && dtype_str != "float32") {
     std::cerr << "Error: dtype must be either 'float16' or 'float32'" << std::endl;
     return EXIT_FAILURE;
   }
+  // Convert dtype string to torch dtype
+  torch::Dtype dtype = (dtype_str == "float16") ? torch::kFloat16 : torch::kFloat32;
 
-  if (!load_tensorrt_plugin(trt_plugin_path)) {
+  if (!load_tensorrt_plugin(trt_plugin_path, logger)) {
     std::cerr << "Failed to load TensorRT plugin." << std::endl;
     return EXIT_FAILURE;
   }
@@ -481,6 +505,7 @@ int main(int argc, char *argv[]) {
     std::cout << "Model is likely TorchScript" << std::endl;
   } else if (ends_with(model_path, ".engine")) {
     std::cout << "Model is likely a Serialized TensorRT Engine" << std::endl;
+    is_tensorrt_engine = true;
   } else {
     std::cerr << "Error: Unsupported model file extension. Expected '.ts' or "
                  "'.engine'"
@@ -488,10 +513,13 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  torch_tensorrt::set_device(0);
+  // Check CUDA availability
+  if (!torch::cuda::is_available()) {
+    std::cerr << "CUDA is not available!" << std::endl;
+    return EXIT_FAILURE;
+  }
 
-  // Convert dtype string to torch dtype
-  torch::Dtype dtype = (dtype_str == "float16") ? torch::kFloat16 : torch::kFloat32;
+  torch_tensorrt::set_device(0);
 
   // Load image
   std::cout << "Loading image from: " << image_path << std::endl;
@@ -503,13 +531,21 @@ int main(int argc, char *argv[]) {
   }
 
   // Preprocess image
-  auto [batch_inputs, img_masks, scale] = preprocess_image(image, target_height, target_width);
-  batch_inputs = batch_inputs.to(dtype);
-  img_masks = img_masks.to(dtype);
-
+  auto [batch_inputs_fp32, img_masks_fp32, scale] = preprocess_image(image, target_height, target_width);
+  std::cout << "Preprocessed image shape: " << batch_inputs_fp32.sizes() << std::endl;
+  std::cout << "Image mask shape: " << img_masks_fp32.sizes() << std::endl;
+  std::cout << "Scale: " << scale << std::endl;
+  // Validate preprocess_image output
+  if (!batch_inputs_fp32.defined() || !img_masks_fp32.defined()) {
+    std::cerr << "Error: preprocess_image returned undefined tensors!" << std::endl;
+    return EXIT_FAILURE;
+  }
+  std::cout << "Preprocessed image tensors defined." << std::endl;
+  torch::Tensor batch_inputs = batch_inputs_fp32.to(dtype);
+  torch::Tensor img_masks = img_masks_fp32.to(dtype);
+  std::cout << "converted types" << std::endl;
   torch::Tensor boxes, scores, labels;
   if (is_tensorrt_engine) {
-    Logger logger;
     nvinfer1::ICudaEngine *engine = load_trt_engine(model_path, logger);
     if (!engine) {
       return EXIT_FAILURE;
