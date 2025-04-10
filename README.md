@@ -1,5 +1,58 @@
-# Co-DETR-TensorRT
-Co-DETR to TensorRT export
+# Co-DETR to TensorRT
+This repository presents a refactored implementation of the [open-mmlab/mmdetection](https://github.com/open-mmlab/mmdetection/tree/main/projects/CO-DETR) Co-DETR object detection neural network architecture to enable export and compilation from [Pytorch](https://pytorch.org/) to [NVIDIA's TensorRT Deep Learning Optimization and Runtime framework](https://developer.nvidia.com/tensorrt).
+
+Compiliation from Pytorch to TensorRT is accomplished in two steps
+1. Trace the Co-DETR neural network graph via [`torch.export.export`](https://pytorch.org/docs/stable/export.html#torch.export.export) to yield an Export Intermediate Representation (IR) (`torch.export.ExportedProgram`) that bundles the computational graph (`torch.fx.GraphModule`), the graph signature specifying the parameters and buffer names used and mutated within the graph, and parameters and weights of the model. The Ahead-of-Time (AOT) tracing process removes all Python control flow and data structures, and recasts the computation as a series of [ATen operators](https://pytorch.org/executorch/stable/ir-ops-set-definition.html)
+
+* References:
+  * https://pytorch.org/docs/stable/export.ir_spec.html
+  * https://pytorch.org/cppdocs/
+2. Compile the traced IR graph to TensorRT via [`torch_tensorrt.dynamo.compile`](https://pytorch.org/TensorRT/py_api/dynamo.html). The [torch_tensorrt](https://pytorch.org/TensorRT/) library uses the [TorchDynamo](https://pytorch.org/docs/stable/torch.compiler_dynamo_overview.html) compiler to replace Pytorch operators in the traced graph with equivalent TensorRT operators. Operators unsupported in TensorRT will be left as Pytorch ATen operators, resulting a hybrid graph composed on ATen and TensorRT subgraphs. The TensorRT-compatible subgraphs are optimized and executed using TensorRT, while the remaining parts are handled by PyTorch's native execution. In general, a model fully compiled to TensorRT operators is expected to achieve better performance. To enable full TensorRT compilation of Co-DETR, I implemented a [C++ TensorRT Plugin for the Multi-Scale Deformable Attention operator](codetr/csrc/deformable_attention_plugin.cpp) and a [dynamo_tensorrt_converter wrapper](codetr/csrc/deformable_attention_plugin.cpp). The compiled Co-DETR TensorRT can be run in Python or C++ with the TorchScript frontend or with native TensorRT. To execute with native TensorRT, the model can be serialized to a TensorRT engine via `torch_tensorrt.dynamo.convert_exported_program_to_serialized_trt_engine`.
+
+* References
+  * https://github.com/pytorch/TensorRT
+  * https://pytorch.org/docs/stable/torch.compiler.html
+  * https://pytorch.org/TensorRT/contributors/dynamo_converters.html
+
+
+2.12x inference runtime speed-up is achieved 
+
+|   Model         | Input Size (W,H) | Pytorch FP32 | Pytorch FP16 | TensorRT FP16 | Speed-up |
+| :-------:       | :--------------: | :----------: | :----------: | :-----------: | :------: |
+|  Co-DINO Swin-L | (1152, 768)      |  100 ms      | 50.77 ms     |  36.56ms      | 2.12x    |
+
+
+# CO-DETR
+
+> [DETRs with Collaborative Hybrid Assignments Training](https://arxiv.org/abs/2211.12860)
+
+## Abstract
+
+In this paper, we provide the observation that too few queries assigned as positive samples in DETR with one-to-one set matching leads to sparse supervision on the encoder's output which considerably hurt the discriminative feature learning of the encoder and vice visa for attention learning in the decoder. To alleviate this, we present a novel collaborative hybrid assignments training scheme, namely Co-DETR, to learn more efficient and effective DETR-based detectors from versatile label assignment manners. This new training scheme can easily enhance the encoder's learning ability in end-to-end detectors by training the multiple parallel auxiliary heads supervised by one-to-many label assignments such as ATSS and Faster RCNN. In addition, we conduct extra customized positive queries by extracting the positive coordinates from these auxiliary heads to improve the training efficiency of positive samples in the decoder. In inference, these auxiliary heads are discarded and thus our method introduces no additional parameters and computational cost to the original detector while requiring no hand-crafted non-maximum suppression (NMS). We conduct extensive experiments to evaluate the effectiveness of the proposed approach on DETR variants, including DAB-DETR, Deformable-DETR, and DINO-Deformable-DETR. The state-of-the-art DINO-Deformable-DETR with Swin-L can be improved from 58.5% to 59.5% AP on COCO val. Surprisingly, incorporated with ViT-L backbone, we achieve 66.0% AP on COCO test-dev and 67.9% AP on LVIS val, outperforming previous methods by clear margins with much fewer model sizes.
+
+<div align=center>
+<img src="https://github.com/open-mmlab/mmdetection/assets/17425982/dceaf7ee-cd6c-4be0-b7b1-5b01a7f11724"/>
+</div>
+
+## Results and Models
+
+|   Model   | Backbone | Epochs | Aug  |            Dataset            | box AP |                                 Config                                 |                                                                                                                                                     Download                                                                                                                                                      |
+| :-------: | :------: | :----: | :--: | :---------------------------: | :----: | :--------------------------------------------------------------------: | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
+|  Co-DINO  |   R50    |   12   | LSJ  |             COCO              |  52.0  |    [config](configs/codino/co_dino_5scale_r50_lsj_8xb2_1x_coco.py)     | [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_r50_lsj_8xb2_1x_coco/co_dino_5scale_r50_lsj_8xb2_1x_coco-69a72d67.pth)\\ [log](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_r50_lsj_8xb2_1x_coco/co_dino_5scale_r50_lsj_8xb2_1x_coco_20230818_150457.json) |
+| Co-DINO\* |   R50    |   12   | DETR |             COCO              |  52.1  |      [config](configs/codino/co_dino_5scale_r50_8xb2_1x_coco.py)       |                                                                                                      [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_r50_1x_coco-7481f903.pth)                                                                                                      |
+| Co-DINO\* |   R50    |   36   | LSJ  |             COCO              |  54.8  |    [config](configs/codino/co_dino_5scale_r50_lsj_8xb2_3x_coco.py)     |                                                                                                    [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_lsj_r50_3x_coco-fe5a6829.pth)                                                                                                    |
+| Co-DINO\* |  Swin-L  |   12   | DETR |             COCO              |  58.9  |    [config](configs/codino/co_dino_5scale_swin_l_16xb1_1x_coco.py)     |                                                                                                  [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_swin_large_1x_coco-27c13da4.pth)                                                                                                   |
+| Co-DINO\* |  Swin-L  |   12   | LSJ  |             COCO              |  59.3  |  [config](configs/codino/co_dino_5scale_swin_l_lsj_16xb1_1x_coco.py)   |                                                                                                [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_lsj_swin_large_1x_coco-3af73af2.pth)                                                                                                 |
+| Co-DINO\* |  Swin-L  |   36   | DETR |             COCO              |  60.0  |    [config](configs/codino/co_dino_5scale_swin_l_16xb1_3x_coco.py)     |                                                                                                  [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_swin_large_3x_coco-d7a6d8af.pth)                                                                                                   |
+| Co-DINO\* |  Swin-L  |   36   | LSJ  |             COCO              |  60.7  |  [config](configs/codino/co_dino_5scale_swin_l_lsj_16xb1_3x_coco.py)   |                                                                                                [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_lsj_swin_large_1x_coco-3af73af2.pth)                                                                                                 |
+| Co-DINO\* |  Swin-L  |   16   | DETR | Objects365 pre-trained + COCO |  64.1  | [config](configs/codino/co_dino_5scale_swin_l_16xb1_16e_o365tococo.py) |                                                                                               [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_swin_large_16e_o365tococo-614254c9.pth)                                                                                               |
+
+Note
+
+- Models labeled * are not trained by us, but from [CO-DETR](https://github.com/Sense-X/Co-DETR) official website.
+- We find that the performance is unstable and may fluctuate by about 0.3 mAP.
+- If you want to save GPU memory by enabling checkpointing, please use the `pip install fairscale` command.
+
 
 
 # Installation
@@ -100,7 +153,15 @@ make -j8
 LD_LIBRARY_PATH=/home/bryan/src/libtorch/lib:/home/bryan/src/libtorchvision/lib:/home/bryan/src/torch_tensorrt/lib:/home/bryan/src/TensorRT-10.7.0.23/lib:$LD_LIBRARY_PATH ./codetr_inference \
 --model /home/bryan/expr/co-detr/export/codetr_fp16/codetr.ts \
 --input ../assets/demo.jpg \
---output /home/bryan/expr/co-detr/export/codetr_fp16/cpp_output.jpg
+--output /home/bryan/expr/co-detr/export/codetr_fp16/cpp_ts_output.jpg \
+--benchmark-iterations 100
+
+
+LD_LIBRARY_PATH=/home/bryan/src/libtorch/lib:/home/bryan/src/libtorchvision/lib:/home/bryan/src/torch_tensorrt/lib:/home/bryan/src/TensorRT-10.7.0.23/lib:$LD_LIBRARY_PATH ./codetr_inference \
+--model /home/bryan/expr/co-detr/export/codetr_fp16/codetr.engine \
+--input ../assets/demo.jpg \
+--output /home/bryan/expr/co-detr/export/codetr_fp16/cpp_engine_output.jpg \
+--benchmark-iterations 100
 
 ```
 
@@ -267,8 +328,34 @@ https://docs.nvidia.com/deeplearning/tensorrt/latest/inference-library/extending
 https://docs.nvidia.com/deeplearning/tensorrt/latest/_static/python-api/index.html
 * TensorRT python API documentation
 
+TensorRT C++ Documentation
+* https://docs.nvidia.com/deeplearning/tensorrt/latest/_static/c-api/index.html
+* https://docs.nvidia.com/deeplearning/tensorrt/latest/inference-library/c-api-docs.html
+
 
 # Writing Dynamo Converters
 https://pytorch.org/TensorRT/contributors/dynamo_converters.html
 * unfortunately didn't provide a fulle xample
 *  torch_tensorrt dynamo/conversion library https://github.com/pytorch/TensorRT/tree/v2.6.0/py/torch_tensorrt/dynamo/conversion
+
+
+# Inference time speed-up
+
+Not including the post-processing code
+```
+PyTorch implementation:
+  50.77 ms
+  1 measurement, 10 runs , 1 thread
+TensorRT implementation:
+  36.56 ms
+  1 measurement, 100 runs , 1 thread
+TensorRT speedup: 1.39x 
+```
+
+C++
+```
+TorchScript: 
+Average inference time: 36.46ms
+TensorRT:
+Average inference time: 36.50ms
+```
