@@ -306,7 +306,8 @@ torch::Tensor convertToTRTDtype(const torch::Tensor &t, nvinfer1::DataType trt_d
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 run_trt_inference(nvinfer1::ICudaEngine *engine,
                   const torch::Tensor &batch_inputs, // [1,3,H,W]
-                  const torch::Tensor &img_masks     // [1,H,W]
+                  const torch::Tensor &img_masks,    // [1,H,W]
+                  int benchmark_iterations = -1      // -1 means no benchmark
 ) {
   nvinfer1::IExecutionContext *context = engine->createExecutionContext();
   if (!context) {
@@ -358,15 +359,30 @@ run_trt_inference(nvinfer1::ICudaEngine *engine,
     cudaMemcpy(deviceBuffers[1], input1_host.data_ptr(), in1_bytes, cudaMemcpyHostToDevice);
   }
 
+  std::cout << "Running inference..." << std::endl;
   cudaStream_t stream;
   cudaStreamCreate(&stream);
-
   // Expect batch size 1
   bool ok = context->enqueueV3(stream);
   if (!ok) {
     throw std::runtime_error("TensorRT executeV3 failed!");
   }
   cudaStreamSynchronize(stream);
+
+  if (benchmark_iterations > 0) {
+    std::cout << "Benchmarking over " << benchmark_iterations << " iterations..." << std::endl;
+    double total_time_ms = 0.0;
+    for (int i = 0; i < benchmark_iterations; ++i) {
+      auto start_bench = std::chrono::high_resolution_clock::now();
+      context->enqueueV3(stream);
+      cudaStreamSynchronize(stream);
+      auto end_bench = std::chrono::high_resolution_clock::now();
+      double bench_duration = std::chrono::duration<double, std::milli>(end_bench - start_bench).count();
+      total_time_ms += bench_duration;
+    }
+    double avg_time_ms = total_time_ms / benchmark_iterations;
+    std::cout << "Average inference time: " << std::fixed << std::setprecision(2) << avg_time_ms << "ms" << std::endl;
+  }
   cudaStreamDestroy(stream);
 
   // We'll assume i=2 => boxes, i=3 => scores, i=4 => labels
@@ -491,7 +507,7 @@ int main(int argc, char *argv[]) {
   int target_width = program.get<int>("--target-width");
   float score_threshold = program.get<float>("--score-threshold");
   float iou_threshold = program.get<float>("--iou-threshold");
-  int bench_iterations = program.get<int>("--benchmark-iterations");
+  int benchmark_iterations = program.get<int>("--benchmark-iterations");
 
   // Parse the argument
   nvinfer1::ILogger::Severity trt_severity = program.get<nvinfer1::ILogger::Severity>("--trt-verbosity");
@@ -563,7 +579,7 @@ int main(int argc, char *argv[]) {
     if (!engine) {
       return EXIT_FAILURE;
     }
-    std::tie(boxes, scores, labels) = run_trt_inference(engine, batch_inputs, img_masks);
+    std::tie(boxes, scores, labels) = run_trt_inference(engine, batch_inputs, img_masks, benchmark_iterations);
 
   } else {
     // Load model
@@ -586,8 +602,26 @@ int main(int argc, char *argv[]) {
     // boxes: has shape (1,num_boxes,4) where 4 is (x1,y1,x2,y2)
     // scores: has shape (1,num_boxes)
     // labels: has shape (1,num_boxes)
+
     std::cout << "Running inference..." << std::endl;
+    // Also counts as warm-up for benchmarking
     auto output = model.forward(inputs).toTuple();
+
+    if (benchmark_iterations > 0) {
+      // Benchmark the model
+      std::cout << "Benchmarking over " << benchmark_iterations << " iterations..." << std::endl;
+      double total_time_ms = 0.0;
+      for (int i = 0; i < benchmark_iterations; ++i) {
+        auto start_bench = std::chrono::high_resolution_clock::now();
+        model.forward(inputs);
+        auto end_bench = std::chrono::high_resolution_clock::now();
+        double bench_duration = std::chrono::duration<double, std::milli>(end_bench - start_bench).count();
+        total_time_ms += bench_duration;
+      }
+
+      double avg_time_ms = total_time_ms / benchmark_iterations;
+      std::cout << "Average inference time: " << std::fixed << std::setprecision(2) << avg_time_ms << "ms" << std::endl;
+    }
     boxes = output->elements()[0].toTensor().to(torch::kFloat32).cpu();
     scores = output->elements()[1].toTensor().to(torch::kFloat32).cpu();
     labels = output->elements()[2].toTensor().to(torch::kInt64).cpu();
@@ -604,25 +638,5 @@ int main(int argc, char *argv[]) {
   // Save output image
   cv::imwrite(output_path, image);
   std::cout << "Output saved to: " << output_path << std::endl;
-
-  // Benchmark the model
-  // std::cout << "Benchmarking over " << bench_iterations << " iterations..."
-  //           << std::endl;
-  // double total_time_ms = 0.0;
-  // for (int i = 0; i < bench_iterations; ++i) {
-  //   auto start_bench = std::chrono::high_resolution_clock::now();
-  //   model.forward(inputs);
-  //   auto end_bench = std::chrono::high_resolution_clock::now();
-  //   double bench_duration =
-  //       std::chrono::duration<double, std::milli>(end_bench - start_bench)
-  //           .count();
-  //   total_time_ms += bench_duration;
-  // }
-
-  // double avg_time_ms = total_time_ms / bench_iterations;
-  // std::cout << "Average inference time: " << std::fixed <<
-  // std::setprecision(2)
-  //           << avg_time_ms << "ms" << std::endl;
-
   return EXIT_SUCCESS;
 }
