@@ -2,12 +2,19 @@
 This repository presents a refactored implementation of the [open-mmlab/mmdetection](https://github.com/open-mmlab/mmdetection/tree/main/projects/CO-DETR) Co-DETR object detection neural network architecture to enable export and compilation from [Pytorch](https://pytorch.org/) to [NVIDIA's TensorRT Deep Learning Optimization and Runtime framework](https://developer.nvidia.com/tensorrt).
 
 Compiliation from Pytorch to TensorRT is accomplished in two steps
-1. Trace the Co-DETR neural network graph via [`torch.export.export`](https://pytorch.org/docs/stable/export.html#torch.export.export) to yield an Export Intermediate Representation (IR) (`torch.export.ExportedProgram`) that bundles the computational graph (`torch.fx.GraphModule`), the graph signature specifying the parameters and buffer names used and mutated within the graph, and parameters and weights of the model. The Ahead-of-Time (AOT) tracing process removes all Python control flow and data structures, and recasts the computation as a series of [ATen operators](https://pytorch.org/executorch/stable/ir-ops-set-definition.html)
+### 1. Ahead-of-Time (AOT) graph tracing:
+The Co-DETR neural network graph is traced via [`torch.export.export`](https://pytorch.org/docs/stable/export.html#torch.export.export) to yield an Export Intermediate Representation (IR) (`torch.export.ExportedProgram`) that bundles the computational graph (`torch.fx.GraphModule`), the graph signature specifying the parameters and buffer names used and mutated within the graph, and the parameters and weights of the model. The tracing process removes all Python control flow and data structures, and recasts the computation as a series of functional [ATen operators](https://pytorch.org/executorch/stable/ir-ops-set-definition.html).
 
 * References:
   * https://pytorch.org/docs/stable/export.ir_spec.html
   * https://pytorch.org/cppdocs/
-2. Compile the traced IR graph to TensorRT via [`torch_tensorrt.dynamo.compile`](https://pytorch.org/TensorRT/py_api/dynamo.html). The [torch_tensorrt](https://pytorch.org/TensorRT/) library uses the [TorchDynamo](https://pytorch.org/docs/stable/torch.compiler_dynamo_overview.html) compiler to replace Pytorch operators in the traced graph with equivalent TensorRT operators. Operators unsupported in TensorRT will be left as Pytorch ATen operators, resulting a hybrid graph composed on ATen and TensorRT subgraphs. The TensorRT-compatible subgraphs are optimized and executed using TensorRT, while the remaining parts are handled by PyTorch's native execution. In general, a model fully compiled to TensorRT operators is expected to achieve better performance. To enable full TensorRT compilation of Co-DETR, I implemented a [C++ TensorRT Plugin for the Multi-Scale Deformable Attention operator](codetr/csrc/deformable_attention_plugin.cpp) and a [dynamo_tensorrt_converter wrapper](codetr/csrc/deformable_attention_plugin.cpp). The compiled Co-DETR TensorRT can be run in Python or C++ with the TorchScript frontend or with native TensorRT. To execute with native TensorRT, the model can be serialized to a TensorRT engine via `torch_tensorrt.dynamo.convert_exported_program_to_serialized_trt_engine`.
+
+### 2. TorchDynamo compilation to TensorRT:
+The traced IR graph is compiled to TensorRT via [`torch_tensorrt.dynamo.compile`](https://pytorch.org/TensorRT/py_api/dynamo.html). The [torch_tensorrt](https://pytorch.org/TensorRT/) library uses the [TorchDynamo](https://pytorch.org/docs/stable/torch.compiler_dynamo_overview.html) compiler to replace Pytorch ATen operators in the traced graph with equivalent TensorRT operators. Operators unsupported in TensorRT are left as Pytorch ATen operators, resulting a hybrid graph composed on Pytorch ATen and TensorRT subgraphs. The TensorRT-compatible subgraphs are optimized and executed using TensorRT, while the remaining parts are handled by PyTorch's native execution. In general, a model fully compiled to TensorRT operators will achieve better performance. To enable full TensorRT compilation of Co-DETR, I implemented a [C++ TensorRT Plugin for the Multi-Scale Deformable Attention operator](codetr/csrc/deformable_attention_plugin.cpp) and a [dynamo_tensorrt_converter wrapper](codetr/csrc/deformable_attention_plugin.cpp). 
+
+The compiled Co-DETR TensorRT model can be saved to disk as a [TorchScript](https://pytorch.org/docs/stable/jit.html) model via [`torch_tensorrt.save`](https://pytorch.org/TensorRT/py_api/torch_tensorrt.html?highlight=save#torch_tensorrt.save). The TorchScript can be standalone executed in Python or C++.
+
+Alternatively, the Co-DETR TensorRT model can be serialized to a TensorRT engine via `torch_tensorrt.dynamo.convert_exported_program_to_serialized_trt_engine` and saved to disk as a binary file. The serialized TensorRT engine can be run natively with TensorRT in Python or C++. 
 
 * References
   * https://github.com/pytorch/TensorRT
@@ -15,24 +22,56 @@ Compiliation from Pytorch to TensorRT is accomplished in two steps
   * https://pytorch.org/TensorRT/contributors/dynamo_converters.html
 
 
-2.12x inference runtime speed-up is achieved 
+### Co-DETR inference runtime is sped up by over 3x (relative to Pytorch FP32) when executing the TensorRT FP16 compiled model
 
-|   Model         | Input Size (W,H) | Pytorch FP32 | Pytorch FP16 | TensorRT FP16 | Speed-up |
-| :-------:       | :--------------: | :----------: | :----------: | :-----------: | :------: |
-|  Co-DINO Swin-L | (1152, 768)      |  100 ms      | 50.77 ms     |  36.56ms      | 2.12x    |
+All benchmarking is performed on an Nvidia RTX 4090 GPU.
+
+|   Model                                         | Input Size (W,H) | Pytorch FP32 | Pytorch FP16 | TensorRT FP16 | Speed-up | 
+| :-------:                                       | :--------------: | :----------: | :----------: | :-----------: | :------: |
+|  Co-DINO Swin-L (Objects365 pre-trained + COCO) | (1920, 1280)     |  346 ms      |  147.1 ms    |  106.3 ms     | 3.26x    |
+|  Co-DINO Swin-L (Objects365 pre-trained + COCO) | (1152, 768)      |  123 ms      |  50.8 ms     |  36.6ms       | 3.36x    |
+|  Co-DINO Swin-L (Objects365 pre-trained + COCO) | (608, 608)       |  59 ms       |  24.8 ms     |  16.8ms       | 3.51x    |
+
+Note that the Swin-L backbone downscales by a factor of 32x
+
+The Co-DINO Swin-L model used here was pulled from the [open-mmlab/mmdetection](https://github.com/open-mmlab/mmdetection/tree/main/projects/CO-DETR) results table
+
+|   Model   | Backbone | Epochs | Aug  | Dataset | box AP   |Config | Download |
+| :-------: | :------: | :----: | :--: | :------: | :-----: | :----: | :---: |
+| Co-DINO\* |  Swin-L  |   16   | DETR | Objects365 pre-trained + COCO |  64.1  | [config](configs/codino/co_dino_5scale_swin_l_16xb1_16e_o365tococo.py) |                                                                                               [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_swin_large_16e_o365tococo-614254c9.pth)   
 
 
-# CO-DETR
-
-> [DETRs with Collaborative Hybrid Assignments Training](https://arxiv.org/abs/2211.12860)
-
-## Abstract
-
-In this paper, we provide the observation that too few queries assigned as positive samples in DETR with one-to-one set matching leads to sparse supervision on the encoder's output which considerably hurt the discriminative feature learning of the encoder and vice visa for attention learning in the decoder. To alleviate this, we present a novel collaborative hybrid assignments training scheme, namely Co-DETR, to learn more efficient and effective DETR-based detectors from versatile label assignment manners. This new training scheme can easily enhance the encoder's learning ability in end-to-end detectors by training the multiple parallel auxiliary heads supervised by one-to-many label assignments such as ATSS and Faster RCNN. In addition, we conduct extra customized positive queries by extracting the positive coordinates from these auxiliary heads to improve the training efficiency of positive samples in the decoder. In inference, these auxiliary heads are discarded and thus our method introduces no additional parameters and computational cost to the original detector while requiring no hand-crafted non-maximum suppression (NMS). We conduct extensive experiments to evaluate the effectiveness of the proposed approach on DETR variants, including DAB-DETR, Deformable-DETR, and DINO-Deformable-DETR. The state-of-the-art DINO-Deformable-DETR with Swin-L can be improved from 58.5% to 59.5% AP on COCO val. Surprisingly, incorporated with ViT-L backbone, we achieve 66.0% AP on COCO test-dev and 67.9% AP on LVIS val, outperforming previous methods by clear margins with much fewer model sizes.
-
+# CO-DETR: Collaborative Detection Transformer
+> Original publication: DETRs with Collaborative Hybrid Assignments Training https://arxiv.org/abs/2211.12860
 <div align=center>
 <img src="https://github.com/open-mmlab/mmdetection/assets/17425982/dceaf7ee-cd6c-4be0-b7b1-5b01a7f11724"/>
 </div>
+
+Co-DETR ranks at the top of the [object detection leaderboard](https://paperswithcode.com/sota/object-detection-on-coco) with a box mAP score of `66.0` on the COCO test-dev dataset.
+
+Co-DETR (Collaborative-DETR) is an advanced object detector that builds upon the DETR family by introducing a collaborative hybrid assignment strategy to improve training efficiency and detection accuracy.
+* One-to-one assignment (as in DETR) allows each ground-truth box to be matched with exactly one query via the Hungarian algorithm.
+* One-to-many assignment introduces auxiliary losses where multiple queries can match a single ground-truth box, improving optimization and convergence.
+* This hybrid assignment leads to better learning signals and faster convergence, especially in the early stages of training.
+* The collaborative hybrid assignment strategy is compatible with existing DETR variants including Deformable-DETR and DINO-Deformable-DETR.
+
+### Comparing DETR variants
+
+| **Component**                  | **DETR (2020)**                                           | **Deformable DETR (2021)**                                        | **DINO (2022)**                                                      | **Co-DETR (2022)**                                                    |
+|-------------------------------|-----------------------------------------------------------|-------------------------------------------------------------------|----------------------------------------------------------------------|------------------------------------------------------------------------|
+| **Backbone**                  | ResNet                                                    | ResNet                                                     | ResNet / Swin / ViT                                                 | ResNet / Swin / ViT                                               |
+| **Encoder Attention**         | Full global attention                                     | Sparse deformable attention                                       | Sparse deformable attention                                         | Sparse deformable attention (optional)                                |
+| **Multi-Scale Features**      | ❌ Only last FPN level                                    | ✔️ Multi-scale deformable attention                                | ✔️ Multi-scale deformable attention                                 | ✔️ Multi-scale support (Deformable attention or FPN)                   |
+| **Positional Encoding**       | Fixed sine-cosine                                         | Learned reference points                                          | Improved sine + learned reference points                            | Follows DINO / Deformable (flexible)                                  |
+| **Query Design**              | Fixed learnable queries                                   | Queries with learnable reference points                           | **Dynamic Anchor Boxes (DAB)** with iterative refinement            | Learnable queries + hybrid one-to-one/one-to-many assignments         |
+| **Matching Strategy**         | One-to-one (Hungarian)                                    | One-to-one (Hungarian)                                            | One-to-one + **one-to-many (auxiliary)**                           | One-to-one + **one-to-many (hybrid branch)**                          |
+| **Auxiliary Losses**          | Intermediate decoder layers only                          | Used                                                               | Used + **Denoising Training (DN)**                                  | One-to-many branch used to boost one-to-one learning                  |
+| **Two-Stage Detection**       | ❌                                                         | ✔️ Optional RPN-like region proposal + refinement                  | ✔️ Commonly used in DINO implementations                            | ✔️ Supported; used in most Co-DETR variants                           |
+| **Training Stability**        | Sensitive                                                 | Improved                                                           | Robust due to DN and dynamic anchors                                | Very stable due to collaborative assignment                           |
+| **Convergence Speed**         | ❌ Slow (500 epochs)                                      | ✅ Fast (~50 epochs)                                               | ✅✅ Very fast (12–36 epochs)                                        | ✅✅ Fast (12–24 epochs), faster than DINO in some variants            |
+| **Key Innovation**            | End-to-end transformer detection                          | Deformable multi-scale sparse attention                           | Denoising + Dynamic Anchors + One-to-many supervision               | **Hybrid one-to-one & one-to-many assignment for collaborative optimization** |
+| **Performance (COCO mAP) test-dev**    | ~42.0 (Resnet50, 500 epochs)                        | ~50.0 (Resnet50, 50 epochs)                         | ~63.3 (Swin-L, 36 epochs)                 | ~64.1 (Swin-L, 16 epochs); ~66.0 (ViT-L, 12 epochs)       |
+
 
 ## Results and Models
 

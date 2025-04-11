@@ -89,14 +89,19 @@ def parse_args():
         default=os.path.join(PROJECT_ROOT, "codetr/csrc/build/libdeformable_attention_plugin.so"),
         help="Path to the plugin library",
     )
+    parser.add_argument(
+        "--ignore-aspect-ratio",
+        action="store_true",
+        help="Ignore aspect ratio when resizing the input image",
+    )
     return parser.parse_args()
 
 
-def get_test_pipeline(height=768, width=1152):
+def get_test_pipeline(height=768, width=1152, ignore_aspect_ratio=False):
     return Compose(
         [
             dict(type="mmdet.InferencerLoader"),
-            dict(type="mmdet.Resize", scale=(width, height), keep_ratio=True),
+            dict(type="mmdet.Resize", scale=(width, height), keep_ratio=not ignore_aspect_ratio),
             dict(type="mmdet.Pad", size=(width, height)),
             dict(
                 type="mmdet.PackDetInputs", meta_keys=("ori_shape", "img_shape", "scale_factor", "img_unpadded_shape")
@@ -105,8 +110,8 @@ def get_test_pipeline(height=768, width=1152):
     )
 
 
-def preprocess_image(image_array, cfg, height, width, batch_size=1):
-    pipeline = get_test_pipeline(height, width)
+def preprocess_image(image_array, cfg, height, width, batch_size=1, ignore_aspect_ratio=False):
+    pipeline = get_test_pipeline(height, width, ignore_aspect_ratio)
     data_preprocessor_cfg = cfg.model.data_preprocessor
     img_mean = data_preprocessor_cfg.get("mean", [123.675, 116.28, 103.53])
     img_std = data_preprocessor_cfg.get("std", [58.395, 57.12, 57.375])
@@ -246,7 +251,9 @@ def main():
     image_array = mmcv.imread(args.image, channel_order="rgb")
 
     # Preprocess image to get proper inputs
-    batch_inputs, img_masks, data_sample = preprocess_image(image_array, cfg, args.height, args.width, args.batch_size)
+    batch_inputs, img_masks, data_sample = preprocess_image(
+        image_array, cfg, args.height, args.width, args.batch_size, args.ignore_aspect_ratio
+    )
     visualizer = Visualizer(image_array, data_sample, dataset_meta, args.score_threshold, args.iou_threshold)
 
     batch_inputs = batch_inputs.to(dtype).to(device)
