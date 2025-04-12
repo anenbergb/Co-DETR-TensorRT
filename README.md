@@ -22,15 +22,19 @@ Alternatively, the Co-DETR TensorRT model can be serialized to a TensorRT engine
   * https://pytorch.org/TensorRT/contributors/dynamo_converters.html
 
 
-### Co-DETR inference runtime is sped up by over 3x (relative to Pytorch FP32) when executing the TensorRT FP16 compiled model
+### Co-DETR inference runtime is sped up by over 4x (relative to Pytorch FP32) when executing the TensorRT FP16 compiled model
 
 All benchmarking is performed on an Nvidia RTX 4090 GPU.
 
 |   Model                                         | Input Size (W,H) | Pytorch FP32 | Pytorch FP16 | TensorRT FP16 | Speed-up | 
 | :-------:                                       | :--------------: | :----------: | :----------: | :-----------: | :------: |
-|  Co-DINO Swin-L (Objects365 pre-trained + COCO) | (1920, 1280)     |  346 ms      |  147.1 ms    |  106.3 ms     | 3.26x    |
-|  Co-DINO Swin-L (Objects365 pre-trained + COCO) | (1152, 768)      |  123 ms      |  50.8 ms     |  36.6ms       | 3.36x    |
-|  Co-DINO Swin-L (Objects365 pre-trained + COCO) | (608, 608)       |  59 ms       |  24.8 ms     |  16.8ms       | 3.51x    |
+|  Co-DINO Swin-L (Objects365 pre-trained + COCO) | (1920, 1280)     |  346 ms      |  147.1 ms    |  79.5 ms      | 4.35x    |
+|  Co-DINO Swin-L (Objects365 pre-trained + COCO) | (1152, 768)      |  123 ms      |  50.8 ms     |  30.2ms       | 4.07x    |
+|  Co-DINO Swin-L (Objects365 pre-trained + COCO) | (608, 608)       |  59 ms       |  24.8 ms     |  13.4ms       | 4.40x    |
+
+The TensorRT FP16 runtimes are the mean GPU compute times reported using `trtexec` with 100 iterations and `--useSpinWait --useCudaGraph` options.
+I recorded slightly longer runtimes of 99.1ms, 36.6ms, and 16.8ms when benchmarking with the `codetr_inference.cpp` script.
+Check out the trtexec section for more information on inference runtime benchmarking.
 
 Note that the Swin-L backbone downscales by a factor of 32x
 
@@ -70,31 +74,7 @@ Co-DETR (Collaborative-DETR) is an advanced object detector that builds upon the
 | **Training Stability**        | Sensitive                                                 | Improved                                                           | Robust due to DN and dynamic anchors                                | Very stable due to collaborative assignment                           |
 | **Convergence Speed**         | ❌ Slow (500 epochs)                                      | ✅ Fast (~50 epochs)                                               | ✅✅ Very fast (12–36 epochs)                                        | ✅✅ Fast (12–24 epochs), faster than DINO in some variants            |
 | **Key Innovation**            | End-to-end transformer detection                          | Deformable multi-scale sparse attention                           | Denoising + Dynamic Anchors + One-to-many supervision               | **Hybrid one-to-one & one-to-many assignment for collaborative optimization** |
-| **Performance (COCO mAP) test-dev**    | ~42.0 (Resnet50, 500 epochs)                        | ~50.0 (Resnet50, 50 epochs)                         | ~63.3 (Swin-L, 36 epochs)                 | ~64.1 (Swin-L, 16 epochs); ~66.0 (ViT-L, 12 epochs)       |
-
-
-## Results and Models
-
-|   Model   | Backbone | Epochs | Aug  |            Dataset            | box AP |                                 Config                                 |                                                                                                                                                     Download                                                                                                                                                      |
-| :-------: | :------: | :----: | :--: | :---------------------------: | :----: | :--------------------------------------------------------------------: | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
-|  Co-DINO  |   R50    |   12   | LSJ  |             COCO              |  52.0  |    [config](configs/codino/co_dino_5scale_r50_lsj_8xb2_1x_coco.py)     | [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_r50_lsj_8xb2_1x_coco/co_dino_5scale_r50_lsj_8xb2_1x_coco-69a72d67.pth)\\ [log](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_r50_lsj_8xb2_1x_coco/co_dino_5scale_r50_lsj_8xb2_1x_coco_20230818_150457.json) |
-| Co-DINO\* |   R50    |   12   | DETR |             COCO              |  52.1  |      [config](configs/codino/co_dino_5scale_r50_8xb2_1x_coco.py)       |                                                                                                      [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_r50_1x_coco-7481f903.pth)                                                                                                      |
-| Co-DINO\* |   R50    |   36   | LSJ  |             COCO              |  54.8  |    [config](configs/codino/co_dino_5scale_r50_lsj_8xb2_3x_coco.py)     |                                                                                                    [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_lsj_r50_3x_coco-fe5a6829.pth)                                                                                                    |
-| Co-DINO\* |  Swin-L  |   12   | DETR |             COCO              |  58.9  |    [config](configs/codino/co_dino_5scale_swin_l_16xb1_1x_coco.py)     |                                                                                                  [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_swin_large_1x_coco-27c13da4.pth)                                                                                                   |
-| Co-DINO\* |  Swin-L  |   12   | LSJ  |             COCO              |  59.3  |  [config](configs/codino/co_dino_5scale_swin_l_lsj_16xb1_1x_coco.py)   |                                                                                                [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_lsj_swin_large_1x_coco-3af73af2.pth)                                                                                                 |
-| Co-DINO\* |  Swin-L  |   36   | DETR |             COCO              |  60.0  |    [config](configs/codino/co_dino_5scale_swin_l_16xb1_3x_coco.py)     |                                                                                                  [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_swin_large_3x_coco-d7a6d8af.pth)                                                                                                   |
-| Co-DINO\* |  Swin-L  |   36   | LSJ  |             COCO              |  60.7  |  [config](configs/codino/co_dino_5scale_swin_l_lsj_16xb1_3x_coco.py)   |                                                                                                [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_lsj_swin_large_1x_coco-3af73af2.pth)                                                                                                 |
-| Co-DINO\* |  Swin-L  |   16   | DETR | Objects365 pre-trained + COCO |  64.1  | [config](configs/codino/co_dino_5scale_swin_l_16xb1_16e_o365tococo.py) |                                                                                               [model](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_swin_large_16e_o365tococo-614254c9.pth)                                                                                               |
-
-Note
-
-- Models labeled * are not trained by us, but from [CO-DETR](https://github.com/Sense-X/Co-DETR) official website.
-- We find that the performance is unstable and may fluctuate by about 0.3 mAP.
-- If you want to save GPU memory by enabling checkpointing, please use the `pip install fairscale` command.
-
-
-
-# Installation
+| **Performance (COCO mAP) test-dev**    | ~42.0 (Resnet50, 500 epochs)                        | ~50.0 (Resnet50, 50 epochs)                         | ~63.3 (Swin-L, 36 epochs)                 | ~64.1 (Swin-L, 16 e99.11ms
 
 ## Installing TensorRT
 The version of TensorRT used to build and run the C++ Co-DETR inference executable must be the same version as that used to compile the Co-DETR model engine in python.
@@ -397,4 +377,133 @@ TorchScript:
 Average inference time: 36.46ms
 TensorRT:
 Average inference time: 36.50ms
+```
+
+# Inspecting the engine file
+
+TensorRT performance benchmarking with trtexec
+* https://docs.nvidia.com/deeplearning/tensorrt/latest/performance/best-practices.html#performance-benchmarking-using-trtexec
+
+
+// doesn't need the libtorch path apparently?
+LD_LIBRARY_PATH=/home/bryan/src/libtorch/lib:/home/bryan/src/TensorRT-10.7.0.23/lib:$LD_LIBRARY_PATH \
+LD_PRELOAD=/home/bryan/src/Co-DETR-TensorRT/codetr/csrc/build/libdeformable_attention_plugin.so \
+./trtexec \
+--loadEngine=/home/bryan/expr/co-detr/export/codetr_fp16/codetr.engine \
+--fp16 --useSpinWait --useCudaGraph \
+--iterations=100 --warmUp=500 --avgRuns=100  \
+> /home/bryan/expr/co-detr/export/codetr_fp16/trtexec07-benchmark-no-spin-cuda-graph.log 2>&1
+
+
+
+
+
+--dumpProfile  \
+
+
+
+--dumpLayerInfo --verbose  > trtexec01.log
+--iterations=100 --warmUp=10 --avgRuns=100 --useSpinWait --useCudaGraph > trtexec02-benchmark.log
+--dumpProfile --dumpLayerInfo --dumpOptimizationProfile  > trtexec03-benchmark.log
+--dumpOptimizationProfile > trtexec04-benchmark.log 
+--dumpLayerInfo > trtexec05-layerinfo.log # prints all the multiplies, etc with layers
+
+
+
+[NVIDIA Nsight Systems](https://developer.nvidia.com/nsight-systems) can be used to profile the Co-DETR TensorRT engine execution. TensorRT uses [NVIDIA Took Extension SDK (NVTX)](https://docs.nvidia.com/nsight-visual-studio-edition/2020.1/nvtx/index.html) to record the start and stop timestamps for each layer. By prefixing the `trtexec` command with `nsys profile`, we can record the timing events and to a log file for visualization and analysis in the Nsight Systems application.
+
+```
+LD_LIBRARY_PATH=/home/bryan/src/libtorch/lib:/home/bryan/src/TensorRT-10.7.0.23/lib:$LD_LIBRARY_PATH \
+LD_PRELOAD=/home/bryan/src/Co-DETR-TensorRT/codetr/csrc/build/libdeformable_attention_plugin.so \
+nsys profile -o /home/bryan/expr/co-detr/export/codetr_fp16/nsys_profiler \
+--capture-range cudaProfilerApi --cuda-memory-usage=true \
+./trtexec \
+--loadEngine=/home/bryan/expr/co-detr/export/codetr_fp16/codetr.engine \
+--fp16 \
+--iterations=100 --warmUp=500 --avgRuns=100 --useSpinWait
+```
+
+then run
+```
+> nsight-sys
+```
+
+In Nsight Systems, you can open the `nsys_profiler.nsys-rep` file to visualize `trtexec` execution and trace TensorRT kernel calls. In the Timeline View, a single `ExecutionContext::enqueue` call (which runs the Co-DETR model) took 32.772 ms. The Stats panel’s CUDA GPU Kernel Summary shows detailed timing, where the `codetr::ms_deformable_im2col_gpu_kernel`—the core of the multiscale deformable attention operator—averaged 368.936 µs per inference, accounting for 6.0% of the total runtime.
+
+
+If `trtexec` is run with `--useCudaGraph` then the the first enqueue will capture the CUDA graph (including all kernels, memory transfers, etc) and subsequent iterations will be extremely fast. In this case `--cuda-graph-trace=node` flag should be added to the nsys command to see the per-kernel runtime information.
+
+
+By default, TensorRT only shows layer names in the NVTX markers.
+// torch_tensorrt builds the TensorRT engine with profiling verbosity set to ProfilingVerbosity::kLAYER_NAMES_ONLY, which records the layer names, execution time per layer, and layer order in the engine. Unfortunately torch_tensorrt compilation doesn't provide an option to build the engine with ProfilingVerbosity::kDETAILED which would expose detailed layer information including tensor input/output names, shapes and data types, tensor formats, chosen tactics, and memory usage per layer.
+
+
+With Nsight Systems can 
+
+NVTX
+* https://docs.nvidia.com/nsight-visual-studio-edition/2020.1/nvtx/index.html
+NVTX Trace
+* https://docs.nvidia.com/nsight-systems/UserGuide/index.html#nvtx-trace
+
+
+
+NVTX GPU Projection Summary
+
+
+
+Observations for the (1152, 768) model
+[TRT] Loaded engine size: 472 MiB
+Engine deserialized in 0.217118 sec.
+Average on 100 runs - GPU latency: 33.3955 ms - Host latency: 34.0781 ms (enqueue 33.2959 ms)
+
+GPU Compute Time: the GPU latency to execute the kernels for a query.
+Total GPU Compute Time: the summation of the GPU Compute Time of all the queries. Notice that the Total GPU Compute Time: 3.33955 s is nearly equal to the Total Host Walltime of 3.34036 s, which indicates that the GPU is not under-utilized because of host-side overheads or data transfers.
+Enqueue Time: the host latency to enqueue a query. If this is longer than GPU Compute Time, the GPU may be under-utilized.
+H2D Latency: the latency for host-to-device data transfers for input tensors of a single query.
+D2H Latency: the latency for device-to-host data transfers for output tensors of a single query.
+Latency: the summation of H2D Latency, GPU Compute Time, and D2H Latency. This is the latency to infer a single query.
+* How much time elapses from an input presented to the network until an output is available. This is the latency of the network for a single inference. Lower latencies are better.
+Throughput: Another performance measurement is how many inferences can be completed in a fixed time. This is the throughput of the network. Higher throughput is better. Higher throughputs indicate a more efficient utilization of fixed compute resources. 
+
+
+
+
+```
+[04/11/2025-15:15:48] [I] TensorRT version: 10.7.0
+[04/11/2025-15:15:48] [I] Loading standard plugins
+[04/11/2025-15:15:48] [I] [TRT] Loaded engine size: 472 MiB
+[04/11/2025-15:15:48] [I] Engine deserialized in 0.212037 sec.
+[04/11/2025-15:15:48] [I] [TRT] [MS] Running engine with multi stream info
+[04/11/2025-15:15:48] [I] [TRT] [MS] Number of aux streams is 3
+[04/11/2025-15:15:48] [I] [TRT] [MS] Number of total worker streams is 4
+[04/11/2025-15:15:48] [I] [TRT] [MS] The main stream provided by execute/enqueue calls is the first worker stream
+[04/11/2025-15:15:48] [I] [TRT] [MemUsageChange] TensorRT-managed allocation in IExecutionContext creation: CPU +0, GPU +1025, now: CPU 0, GPU 1484 (MiB)
+[04/11/2025-15:15:48] [I] Setting persistentCacheLimit to 0 bytes.
+[04/11/2025-15:15:48] [I] Created execution context with device memory size: 1024.62 MiB
+[04/11/2025-15:15:48] [I] Using random values for input batch_inputs
+[04/11/2025-15:15:48] [I] Input binding for batch_inputs with dimensions 1x3x768x1152 is created.
+[04/11/2025-15:15:48] [I] Using random values for input img_masks
+[04/11/2025-15:15:48] [I] Input binding for img_masks with dimensions 1x768x1152 is created.
+[04/11/2025-15:15:48] [I] Output binding for output0 with dimensions 1x300x4 is created.
+[04/11/2025-15:15:48] [I] Output binding for output1 with dimensions 1x300 is created.
+[04/11/2025-15:15:48] [I] Output binding for output2 with dimensions 1x300 is created.
+[04/11/2025-15:15:48] [I] Starting inference
+[04/11/2025-15:15:48] [I] Capturing CUDA graph for the current execution context
+[04/11/2025-15:15:48] [I] Successfully captured CUDA graph for the current execution context
+[04/11/2025-15:15:52] [I] Warmup completed 14 queries over 500 ms
+[04/11/2025-15:15:52] [I] Timing trace has 101 queries over 3.08403 s
+[04/11/2025-15:15:52] [I] 
+[04/11/2025-15:15:52] [I] === Trace details ===
+[04/11/2025-15:15:52] [I] Trace averages of 100 runs:
+[04/11/2025-15:15:52] [I] Average on 100 runs - GPU latency: 30.211 ms - Host latency: 30.8067 ms (enqueue 0.00390778 ms)
+[04/11/2025-15:15:52] [I] 
+[04/11/2025-15:15:52] [I] === Performance summary ===
+[04/11/2025-15:15:52] [I] Throughput: 32.7494 qps
+[04/11/2025-15:15:52] [I] Latency: min = 30.7003 ms, max = 31.6415 ms, mean = 30.8066 ms, median = 30.7695 ms, percentile(90%) = 30.8008 ms, percentile(95%) = 31.1944 ms, percentile(99%) = 31.5444 ms
+[04/11/2025-15:15:52] [I] Enqueue Time: min = 0.00305176 ms, max = 0.0141602 ms, mean = 0.00393677 ms, median = 0.00360107 ms, percentile(90%) = 0.00494385 ms, percentile(95%) = 0.00585938 ms, percentile(99%) = 0.00842285 ms
+[04/11/2025-15:15:52] [I] H2D Latency: min = 0.5896 ms, max = 0.614014 ms, mean = 0.590921 ms, median = 0.590332 ms, percentile(90%) = 0.591431 ms, percentile(95%) = 0.592529 ms, percentile(99%) = 0.602051 ms
+[04/11/2025-15:15:52] [I] GPU Compute Time: min = 30.1056 ms, max = 31.0457 ms, mean = 30.2108 ms, median = 30.1722 ms, percentile(90%) = 30.2061 ms, percentile(95%) = 30.6002 ms, percentile(99%) = 30.9484 ms
+[04/11/2025-15:15:52] [I] D2H Latency: min = 0.00390625 ms, max = 0.00634766 ms, mean = 0.00490275 ms, median = 0.00463867 ms, percentile(90%) = 0.00585938 ms, percentile(95%) = 0.00598145 ms, percentile(99%) = 0.00628662 ms
+[04/11/2025-15:15:52] [I] Total Host Walltime: 3.08403 s
+[04/11/2025-15:15:52] [I] Total GPU Compute Time: 3.05129 s
 ```
