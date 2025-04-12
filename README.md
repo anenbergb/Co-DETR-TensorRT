@@ -507,3 +507,40 @@ Throughput: Another performance measurement is how many inferences can be comple
 [04/11/2025-15:15:52] [I] Total Host Walltime: 3.08403 s
 [04/11/2025-15:15:52] [I] Total GPU Compute Time: 3.05129 s
 ```
+
+
+# Docker container set-up
+
+1. Install Prerequisites
+* NVIDIA GPU drivers installed
+* Docker installed: https://docs.docker.com/get-docker
+* NVIDIA Container Toolkit
+```
+sudo apt-get install -y nvidia-container-toolkit
+sudo systemctl restart docker
+```
+
+2. Pull Nvidia NGC Container with Pytorch, TensorRT 10.7, and CUDA 12.6
+* https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch
+* https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-24-12.html
+
+
+Release 24.12 contains
+* Ubuntu 24.04 
+* CUDA 12.6.3
+* TensorRT 10.7.0.23
+* PyTorch 2.6.0a0+df5bbc0
+* Torch-TensorRT 2.6.0a0
+```
+sudo docker pull nvcr.io/nvidia/pytorch:24.12-py3
+```
+
+3. Run the container
+
+``
+sudo docker run --rm -it \
+  --gpus all \
+  --ipc=host \
+  -v $(pwd):/workspace \
+  nvcr.io/nvidia/pytorch:24.12-py3
+``
