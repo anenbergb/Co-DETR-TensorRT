@@ -29,6 +29,22 @@ from mmdet.utils import InstanceList
 
 
 class Inferencer:
+    """A class for running inference on object detection models.
+
+    This class handles preprocessing, inference, postprocessing, and visualization
+    of predictions for object detection models. It supports custom pipelines,
+    score thresholds, IoU thresholds, and visualization options.
+
+    Args:
+        model (nn.Module): The object detection model to use for inference.
+        model_file (str): Path to the model configuration file.
+        dataset_meta (dict): Metadata for the dataset (e.g., class names).
+        score_threshold (float, optional): Minimum score threshold for predictions.
+            If not provided, the value from the model's test configuration is used.
+        iou_threshold (float, optional): IoU threshold for non-maximum suppression (NMS).
+            If not provided, the value from the model's test configuration is used.
+    """
+
     def __init__(
         self,
         model,
@@ -37,6 +53,11 @@ class Inferencer:
         score_threshold: Optional[float] = None,
         iou_threshold: Optional[float] = None,
     ):
+        """Initializes the Inferencer with the model, configuration, and thresholds.
+
+        Raises:
+            AssertionError: If the data preprocessor type is not `DetDataPreprocessor`.
+        """
         self.model = model
         self.dataset_meta = dataset_meta
 
@@ -64,7 +85,17 @@ class Inferencer:
         self.num_predicted_imgs = 0
 
     def _init_pipeline(self, cfg: Config) -> Compose:
-        """Initialize the test pipeline."""
+        """Initialize the test pipeline.
+
+        Args:
+            cfg (Config): The model configuration.
+
+        Returns:
+            Compose: A composed pipeline for preprocessing input data.
+
+        Raises:
+            ValueError: If `LoadImageFromFile` is not found in the pipeline configuration.
+        """
         pipeline_cfg = cfg.test_dataloader.dataset.pipeline
 
         # For inference, the key of ``img_id`` is not used.
@@ -80,9 +111,14 @@ class Inferencer:
         return Compose(pipeline_cfg)
 
     def _get_transform_idx(self, pipeline_cfg: Config, name: Union[str, Tuple[str, type]]) -> int:
-        """Returns the index of the transform in a pipeline.
+        """Returns the index of a specific transform in the pipeline.
 
-        If the transform is not found, returns -1.
+        Args:
+            pipeline_cfg (Config): The pipeline configuration.
+            name (Union[str, Tuple[str, type]]): The name or type of the transform to find.
+
+        Returns:
+            int: The index of the transform in the pipeline. Returns -1 if not found.
         """
         for i, transform in enumerate(pipeline_cfg):
             if transform["type"] in name:
@@ -90,13 +126,16 @@ class Inferencer:
         return -1
 
     def _init_visualizer(self, cfg: Config) -> Optional[Visualizer]:
-        """Initialize visualizers.
+        """Initialize the visualizer for predictions.
 
         Args:
-            cfg (ConfigType): Config containing the visualizer information.
+            cfg (Config): The model configuration.
 
         Returns:
-            Visualizer or None: Visualizer initialized with config.
+            Optional[Visualizer]: A visualizer instance or None if not configured.
+
+        Raises:
+            ValueError: If the visualizer is not defined in the configuration.
         """
         if "visualizer" not in cfg:
             return None
@@ -113,23 +152,11 @@ class Inferencer:
         """Add predictions to `DetDataSample`.
 
         Args:
-            data_samples (list[:obj:`DetDataSample`], optional): A batch of
-                data samples that contain annotations and predictions.
-            results_list (list[:obj:`InstanceData`]): Detection results of
-                each image.
+            data_samples (list[DetDataSample]): A batch of data samples containing annotations.
+            results_list (list[InstanceData]): Detection results for each image.
 
         Returns:
-            list[:obj:`DetDataSample`]: Detection results of the
-            input images. Each DetDataSample usually contain
-            'pred_instances'. And the ``pred_instances`` usually
-            contains following keys.
-
-                - scores (Tensor): Classification scores, has a shape
-                    (num_instance, )
-                - labels (Tensor): Labels of bboxes, has a shape
-                    (num_instances, ).
-                - bboxes (Tensor): Has a shape (num_instances, 4),
-                    the last dimension 4 arrange as (x1, y1, x2, y2).
+            list[DetDataSample]: Updated data samples with predictions added.
         """
         for data_sample, pred_instances in zip(data_samples, results_list):
             data_sample.pred_instances = pred_instances
@@ -149,28 +176,24 @@ class Inferencer:
         img_out_dir: str = "",
         **kwargs,
     ) -> Union[List[np.ndarray], None]:
-        """Visualize predictions.
+        """Visualize predictions on input images.
 
         Args:
-            inputs (List[Union[str, np.ndarray]]): Inputs for the inferencer.
-            preds (List[:obj:`DetDataSample`]): Predictions of the model.
-            return_vis (bool): Whether to return the visualization result.
-                Defaults to False.
-            show (bool): Whether to display the image in a popup window.
-                Defaults to False.
-            wait_time (float): The interval of show (s). Defaults to 0.
-            draw_pred (bool): Whether to draw predicted bounding boxes.
-                Defaults to True.
-            pred_score_thr (float): Minimum score of bboxes to draw.
-                Defaults to 0.3.
-            no_save_vis (bool): Whether to force not to save prediction
-                vis results. Defaults to False.
-            img_out_dir (str): Output directory of visualization results.
-                If left as empty, no file will be saved. Defaults to ''.
+            inputs (List[np.ndarray]): List of input images.
+            preds (SampleList): Predictions for the input images.
+            return_vis (bool): Whether to return the visualization results. Default: False.
+            show (bool): Whether to display the images in a popup window. Default: False.
+            wait_time (int): Time to wait between displaying images (in seconds). Default: 0.
+            draw_pred (bool): Whether to draw predicted bounding boxes. Default: True.
+            pred_score_thr (float): Minimum score threshold for drawing predictions. Default: 0.3.
+            no_save_vis (bool): Whether to disable saving visualization results. Default: False.
+            img_out_dir (str): Directory to save visualization results. Default: "".
 
         Returns:
-            List[np.ndarray] or None: Returns visualization results only if
-            applicable.
+            Union[List[np.ndarray], None]: Visualization results if applicable, otherwise None.
+
+        Raises:
+            ValueError: If the visualizer is not defined in the configuration.
         """
         if no_save_vis is True:
             img_out_dir = ""
@@ -334,11 +357,14 @@ class Inferencer:
         return result
 
     def run_inference(self, batch_inputs: torch.Tensor, batch_data_samples: SampleList) -> InstanceList:
-        """
-        Args:
-            batch_inputs (Tensor): Inputs, has shape (bs, dim, H, W).
-            batch_data_samples (List[:obj:`DetDataSample`]): The batch
+        """Run inference on a batch of inputs.
 
+        Args:
+            batch_inputs (torch.Tensor): Input tensor of shape `(bs, dim, H, W)`.
+            batch_data_samples (SampleList): List of data samples for the batch.
+
+        Returns:
+            InstanceList: List of detection results for each image in the batch.
         """
         bs, _, H, W = batch_inputs.shape
         # 0 within image, 1 in padded region
@@ -409,8 +435,25 @@ class Inferencer:
         device: str = "cuda:0",
         dtype: torch.dtype = torch.float32,
     ):
-        """
-        Input image is expected to be a numpy array of shape (H, W, 3) in RGB format.
+        """Run inference on a list of images.
+
+        Args:
+            images (List[np.ndarray]): List of input images in RGB format.
+            return_vis (bool): Whether to return visualization results. Default: False.
+            show (bool): Whether to display images in a popup window. Default: False.
+            wait_time (int): Time to wait between displaying images (in seconds). Default: 0.
+            no_save_vis (bool): Whether to disable saving visualization results. Default: False.
+            draw_pred (bool): Whether to draw predicted bounding boxes. Default: True.
+            pred_score_thr (float): Minimum score threshold for drawing predictions. Default: 0.3.
+            return_datasamples (bool): Whether to return predictions as `DetDataSample`. Default: False.
+            print_result (bool): Whether to print predictions to the console. Default: False.
+            no_save_pred (bool): Whether to disable saving predictions. Default: True.
+            out_dir (str): Directory to save predictions and visualizations. Default: "".
+            device (str): Device to run inference on. Default: "cuda:0".
+            dtype (torch.dtype): Data type for inference. Default: `torch.float32`.
+
+        Returns:
+            Dict: A dictionary containing predictions and visualization results.
         """
         results_dict = {"predictions": [], "visualization": []}
         for image in images:

@@ -13,16 +13,21 @@ setup(
     python_requires=">=3.10",
     packages=find_packages(),
     install_requires=[
-        "torch",
-        "torch-tensorrt"
     ],
     extras_require={
+        "full": [
+            # tested with torch 2.6.0, torch_tensorrt 2.6.0, tensorrt 10.7.0
+            "torch",
+            "torch-tensorrt",
+            "tensorrt",
+            # copied from mmdetection/requirements/mminstall.txt v3.3.0
+            "mmcv>=2.0.0rc4,<2.2.0",
+            "mmengine>=0.7.1,<1.0.0",
+            "mmdet @ git+https://github.com/open-mmlab/mmdetection.git@v3.3.0"
+        ],
         "notebook": [
             "jupyter",
-            "itkwidgets",
             "jupyter_contrib_nbextensions",
-            "plotly",
-            "seaborn",
         ],
         "dev": ["black", "mypy", "flake8", "isort", "ipdb", "pytest"],
     },

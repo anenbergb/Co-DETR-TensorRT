@@ -1,5 +1,4 @@
 import os
-import sys
 import argparse
 from typing import List, Tuple, Dict, Any
 import numpy as np

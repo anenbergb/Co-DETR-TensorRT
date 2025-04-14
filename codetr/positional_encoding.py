@@ -1,10 +1,9 @@
 import math
-from typing import Optional
 
 import torch
-from mmengine.model import BaseModule
 from torch import Tensor
 
+from mmengine.model import BaseModule
 from mmdet.utils import OptMultiConfig
 
 

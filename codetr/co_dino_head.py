@@ -14,6 +14,23 @@ from codetr.positional_encoding import SinePositionalEncoding
 
 
 class CoDINOHead(DINOHead):
+    """CoDINOHead: A detection head for CoDETR using a CoDINO transformer.
+
+    This class implements the CoDINO head, which includes positional encoding,
+    classification, and regression branches. It supports multi-scale feature
+    processing and two-stage decoding.
+
+    Args:
+        num_query (int): Number of queries for the transformer. Default: 900.
+        transformer (dict): Configuration for the CoDINO transformer.
+        in_channels (int): Number of input channels (ignored). Default: 2048.
+        max_pos_coords (int): Maximum positional coordinates (ignored). Default: 300.
+        dn_cfg (dict, optional): Configuration for denoising (ignored). Default: None.
+        use_zero_padding (bool, optional): Whether to use zero padding (ignored). Default: False.
+        positional_encoding (dict): Configuration for positional encoding. Default:
+            `dict(type="SinePositionalEncoding", num_feats=128, normalize=True)`.
+        **kwargs: Additional keyword arguments for the parent class.
+    """
 
     def __init__(
         self,
@@ -27,6 +44,13 @@ class CoDINOHead(DINOHead):
         positional_encoding=dict(type="SinePositionalEncoding", num_feats=128, normalize=True),
         **kwargs,
     ):
+        """Initializes the CoDINOHead.
+
+        Raises:
+            AssertionError: If `two_stage_num_proposals` in the transformer configuration
+                is not equal to `num_query`.
+            AssertionError: If the positional encoding type is not "SinePositionalEncoding".
+        """
         self.positional_encoding = positional_encoding
         self.num_query = num_query
 
@@ -47,6 +71,16 @@ class CoDINOHead(DINOHead):
         self.use_sigmoid = self.loss_cls.use_sigmoid
 
     def _init_layers(self):
+        """Initialize the layers of the CoDINO head.
+
+        - Initializes the CoDINO transformer.
+        - Sets up the classification and regression branches.
+        - Ensures compatibility between embedding dimensions and positional encoding features.
+
+        Raises:
+            AssertionError: If the transformer type is not "CoDinoTransformer".
+            AssertionError: If `embed_dims` is not twice the number of positional encoding features.
+        """
         assert self.transformer.pop("type") == "CoDinoTransformer"
         self.transformer = CoDinoTransformer(**self.transformer)
         self.embed_dims = self.transformer.embed_dims
@@ -87,6 +121,29 @@ class CoDINOHead(DINOHead):
         mlvl_feats: List[torch.Tensor],
         img_masks: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Forward pass for the CoDINO head.
+
+        Processes multi-level features and image masks to produce bounding boxes,
+        scores, and labels for object detection.
+
+        Args:
+            mlvl_feats (List[torch.Tensor]): Multi-level feature maps, where each tensor
+                has shape `(bs, embed_dims, h, w)`.
+            img_masks (torch.Tensor): Image masks of shape `(bs, H, W)`, where:
+                - `bs`: Batch size.
+                - `H, W`: Height and width of the input images.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                - det_bboxes (torch.Tensor): Detected bounding boxes of shape `(bs, num_boxes, 4)`,
+                  where `num_boxes` is typically 300. Each box is represented as `(x1, y1, x2, y2)`.
+                - scores (torch.Tensor): Confidence scores of shape `(bs, num_boxes)`.
+                - det_labels (torch.Tensor): Class labels of shape `(bs, num_boxes)`.
+
+        Raises:
+            AssertionError: If the shape of `final_decoder_references_unact` is not compatible
+                with the regression branch.
+        """
         image_height, image_width = img_masks.shape[-2:]
         mlvl_masks = []
         mlvl_positional_encodings = []

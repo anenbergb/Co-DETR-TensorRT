@@ -1,4 +1,3 @@
-# Copyright (c) OpenMMLab. All rights reserved.
 import warnings
 from collections import OrderedDict
 from copy import deepcopy
@@ -22,22 +21,17 @@ from codetr.transformer_mmcv import FFN
 
 
 class WindowMSA(BaseModule):
-    """Window based multi-head self-attention (W-MSA) module with relative
-    position bias.
+    """Window-based Multi-Head Self-Attention (W-MSA) module with relative position bias.
 
     Args:
         embed_dims (int): Number of input channels.
         num_heads (int): Number of attention heads.
         window_size (tuple[int]): The height and width of the window.
-        qkv_bias (bool, optional):  If True, add a learnable bias to q, k, v.
-            Default: True.
-        qk_scale (float | None, optional): Override default qk scale of
-            head_dim ** -0.5 if set. Default: None.
-        attn_drop_rate (float, optional): Dropout ratio of attention weight.
-            Default: 0.0
-        proj_drop_rate (float, optional): Dropout ratio of output. Default: 0.
-        init_cfg (dict | None, optional): The Config for initialization.
-            Default: None.
+        qkv_bias (bool, optional): If True, add a learnable bias to q, k, v. Default: True.
+        qk_scale (float | None, optional): Override default qk scale of `head_dim ** -0.5` if set. Default: None.
+        attn_drop_rate (float, optional): Dropout ratio of attention weights. Default: 0.0.
+        proj_drop_rate (float, optional): Dropout ratio of output. Default: 0.0.
+        init_cfg (dict | None, optional): Initialization configuration. Default: None.
     """
 
     def __init__(
@@ -80,15 +74,19 @@ class WindowMSA(BaseModule):
         self.softmax = nn.Softmax(dim=-1)
 
     def init_weights(self):
+        """Initializes the weights of the WindowMSA module."""
         trunc_normal_(self.relative_position_bias_table, std=0.02)
 
     def forward(self, x, mask=None):
-        """
-        Args:
+        """Forward pass for the WindowMSA module.
 
-            x (tensor): input features with shape of (num_windows*B, N, C)
-            mask (tensor | None, Optional): mask with shape of (num_windows,
-                Wh*Ww, Wh*Ww), value should be between (-inf, 0].
+        Args:
+            x (Tensor): Input features of shape `(num_windows * B, N, C)`.
+            mask (Tensor | None, optional): Attention mask of shape `(num_windows, Wh * Ww, Wh * Ww)`.
+                Values should be between `(-inf, 0]`. Default: None.
+
+        Returns:
+            Tensor: Output features of shape `(num_windows * B, N, C)`.
         """
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
@@ -125,26 +123,20 @@ class WindowMSA(BaseModule):
 
 
 class ShiftWindowMSA(BaseModule):
-    """Shifted Window Multihead Self-Attention Module.
+    """Shifted Window Multi-Head Self-Attention (SW-MSA) module.
 
     Args:
         embed_dims (int): Number of input channels.
         num_heads (int): Number of attention heads.
         window_size (int): The height and width of the window.
-        shift_size (int, optional): The shift step of each window towards
-            right-bottom. If zero, act as regular window-msa. Defaults to 0.
-        qkv_bias (bool, optional): If True, add a learnable bias to q, k, v.
-            Default: True
-        qk_scale (float | None, optional): Override default qk scale of
-            head_dim ** -0.5 if set. Defaults: None.
-        attn_drop_rate (float, optional): Dropout ratio of attention weight.
-            Defaults: 0.
-        proj_drop_rate (float, optional): Dropout ratio of output.
-            Defaults: 0.
-        dropout_layer (dict, optional): The dropout_layer used before output.
-            Defaults: dict(type='DropPath', drop_prob=0.).
-        init_cfg (dict, optional): The extra config for initialization.
-            Default: None.
+        shift_size (int, optional): The shift step of each window towards the bottom-right.
+            If zero, acts as regular W-MSA. Default: 0.
+        qkv_bias (bool, optional): If True, add a learnable bias to q, k, v. Default: True.
+        qk_scale (float | None, optional): Override default qk scale of `head_dim ** -0.5` if set. Default: None.
+        attn_drop_rate (float, optional): Dropout ratio of attention weights. Default: 0.0.
+        proj_drop_rate (float, optional): Dropout ratio of output. Default: 0.0.
+        dropout_layer (dict, optional): Dropout configuration before output. Default: `dict(type='DropPath', drop_prob=0.0)`.
+        init_cfg (dict | None, optional): Initialization configuration. Default: None.
     """
 
     def __init__(
@@ -180,6 +172,15 @@ class ShiftWindowMSA(BaseModule):
         self.drop = build_dropout(dropout_layer)
 
     def forward(self, query, hw_shape):
+        """Forward pass for the SW-MSA module.
+
+        Args:
+            query (Tensor): Input features of shape `(B, L, C)`.
+            hw_shape (tuple[int, int]): Spatial shape of the input as `(H, W)`.
+
+        Returns:
+            Tensor: Output features of shape `(B, L, C)`.
+        """
         B, L, C = query.shape
         H, W = hw_shape
         assert L == H * W, "input feature has wrong size"
@@ -250,13 +251,15 @@ class ShiftWindowMSA(BaseModule):
         return x
 
     def window_reverse(self, windows, H, W):
-        """
+        """Reverses the window partitioning.
+
         Args:
-            windows: (num_windows*B, window_size, window_size, C)
-            H (int): Height of image
-            W (int): Width of image
+            windows (Tensor): Partitioned windows of shape `(num_windows * B, window_size, window_size, C)`.
+            H (int): Height of the original image.
+            W (int): Width of the original image.
+
         Returns:
-            x: (B, H, W, C)
+            Tensor: Reconstructed tensor of shape `(B, H, W, C)`.
         """
         window_size = self.window_size
         B = int(windows.shape[0] / (H * W / window_size / window_size))
@@ -265,11 +268,13 @@ class ShiftWindowMSA(BaseModule):
         return x
 
     def window_partition(self, x):
-        """
+        """Partitions the input into windows.
+
         Args:
-            x: (B, H, W, C)
+            x (Tensor): Input tensor of shape `(B, H, W, C)`.
+
         Returns:
-            windows: (num_windows*B, window_size, window_size, C)
+            Tensor: Partitioned windows of shape `(num_windows * B, window_size, window_size, C)`.
         """
         B, H, W, C = x.shape
         window_size = self.window_size
@@ -280,28 +285,23 @@ class ShiftWindowMSA(BaseModule):
 
 
 class SwinBlock(BaseModule):
-    """ "
+    """Swin Transformer Block.
+
     Args:
-        embed_dims (int): The feature dimension.
-        num_heads (int): Parallel attention heads.
-        feedforward_channels (int): The hidden dimension for FFNs.
-        window_size (int, optional): The local window scale. Default: 7.
-        shift (bool, optional): whether to shift window or not. Default False.
-        qkv_bias (bool, optional): enable bias for qkv if True. Default: True.
-        qk_scale (float | None, optional): Override default qk scale of
-            head_dim ** -0.5 if set. Default: None.
-        drop_rate (float, optional): Dropout rate. Default: 0.
-        attn_drop_rate (float, optional): Attention dropout rate. Default: 0.
-        drop_path_rate (float, optional): Stochastic depth rate. Default: 0.
-        act_cfg (dict, optional): The config dict of activation function.
-            Default: dict(type='GELU').
-        norm_cfg (dict, optional): The config dict of normalization.
-            Default: dict(type='LN').
-        with_cp (bool, optional): Use checkpoint or not. Using checkpoint
-            will save some memory while slowing down the training speed.
-            Default: False.
-        init_cfg (dict | list | None, optional): The init config.
-            Default: None.
+        embed_dims (int): Feature dimension.
+        num_heads (int): Number of attention heads.
+        feedforward_channels (int): Hidden dimension of the feedforward network.
+        window_size (int, optional): Local window size. Default: 7.
+        shift (bool, optional): Whether to apply window shifting. Default: False.
+        qkv_bias (bool, optional): If True, add a learnable bias to q, k, v. Default: True.
+        qk_scale (float | None, optional): Override default qk scale of `head_dim ** -0.5` if set. Default: None.
+        drop_rate (float, optional): Dropout rate. Default: 0.0.
+        attn_drop_rate (float, optional): Dropout rate for attention weights. Default: 0.0.
+        drop_path_rate (float, optional): Stochastic depth rate. Default: 0.0.
+        act_cfg (dict, optional): Activation function configuration. Default: `dict(type='GELU')`.
+        norm_cfg (dict, optional): Normalization layer configuration. Default: `dict(type='LN')`.
+        with_cp (bool, optional): Whether to use checkpointing to save memory. Default: False.
+        init_cfg (dict | None, optional): Initialization configuration. Default: None.
     """
 
     def __init__(
@@ -354,6 +354,15 @@ class SwinBlock(BaseModule):
         )
 
     def forward(self, x, hw_shape):
+        """Forward pass for the Swin Transformer Block.
+
+        Args:
+            x (Tensor): Input tensor of shape `(B, L, C)`.
+            hw_shape (tuple[int, int]): Spatial shape of the input as `(H, W)`.
+
+        Returns:
+            Tensor: Output tensor of shape `(B, L, C)`.
+        """
 
         def _inner_forward(x):
             identity = x
@@ -377,32 +386,24 @@ class SwinBlock(BaseModule):
 
 
 class SwinBlockSequence(BaseModule):
-    """Implements one stage in Swin Transformer.
+    """Implements one stage in the Swin Transformer.
 
     Args:
-        embed_dims (int): The feature dimension.
-        num_heads (int): Parallel attention heads.
-        feedforward_channels (int): The hidden dimension for FFNs.
-        depth (int): The number of blocks in this stage.
-        window_size (int, optional): The local window scale. Default: 7.
-        qkv_bias (bool, optional): enable bias for qkv if True. Default: True.
-        qk_scale (float | None, optional): Override default qk scale of
-            head_dim ** -0.5 if set. Default: None.
-        drop_rate (float, optional): Dropout rate. Default: 0.
-        attn_drop_rate (float, optional): Attention dropout rate. Default: 0.
-        drop_path_rate (float | list[float], optional): Stochastic depth
-            rate. Default: 0.
-        downsample (BaseModule | None, optional): The downsample operation
-            module. Default: None.
-        act_cfg (dict, optional): The config dict of activation function.
-            Default: dict(type='GELU').
-        norm_cfg (dict, optional): The config dict of normalization.
-            Default: dict(type='LN').
-        with_cp (bool, optional): Use checkpoint or not. Using checkpoint
-            will save some memory while slowing down the training speed.
-            Default: False.
-        init_cfg (dict | list | None, optional): The init config.
-            Default: None.
+        embed_dims (int): Feature dimension.
+        num_heads (int): Number of attention heads.
+        feedforward_channels (int): Hidden dimension of the feedforward network.
+        depth (int): Number of blocks in this stage.
+        window_size (int, optional): Local window size. Default: 7.
+        qkv_bias (bool, optional): If True, add a learnable bias to q, k, v. Default: True.
+        qk_scale (float | None, optional): Override default qk scale of `head_dim ** -0.5` if set. Default: None.
+        drop_rate (float, optional): Dropout rate. Default: 0.0.
+        attn_drop_rate (float, optional): Dropout rate for attention weights. Default: 0.0.
+        drop_path_rate (float | list[float], optional): Stochastic depth rate. Default: 0.0.
+        downsample (BaseModule | None, optional): Downsampling module. Default: None.
+        act_cfg (dict, optional): Activation function configuration. Default: `dict(type='GELU')`.
+        norm_cfg (dict, optional): Normalization layer configuration. Default: `dict(type='LN')`.
+        with_cp (bool, optional): Whether to use checkpointing to save memory. Default: False.
+        init_cfg (dict | None, optional): Initialization configuration. Default: None.
     """
 
     def __init__(
@@ -454,6 +455,19 @@ class SwinBlockSequence(BaseModule):
         self.downsample = downsample
 
     def forward(self, x, hw_shape):
+        """Forward pass for the Swin Block Sequence.
+
+        Args:
+            x (Tensor): Input tensor of shape `(B, L, C)`.
+            hw_shape (tuple[int, int]): Spatial shape of the input as `(H, W)`.
+
+        Returns:
+            Tuple[Tensor, tuple[int, int], Tensor, tuple[int, int]]:
+                - x_down (Tensor): Downsampled tensor of shape `(B, L', C')`.
+                - down_hw_shape (tuple[int, int]): Spatial shape of the downsampled tensor.
+                - x (Tensor): Output tensor of shape `(B, L, C)`.
+                - hw_shape (tuple[int, int]): Spatial shape of the output tensor.
+        """
         for block in self.blocks:
             x = block(x, hw_shape)
 
@@ -465,60 +479,33 @@ class SwinBlockSequence(BaseModule):
 
 
 class SwinTransformer(BaseModule):
-    """Swin Transformer
-    A PyTorch implement of : `Swin Transformer:
-    Hierarchical Vision Transformer using Shifted Windows`  -
-        https://arxiv.org/abs/2103.14030
-
-    Inspiration from
-    https://github.com/microsoft/Swin-Transformer
+    """Swin Transformer backbone.
 
     Args:
-        pretrain_img_size (int | tuple[int]): The size of input image when
-            pretrain. Defaults: 224.
-        in_channels (int): The num of input channels.
-            Defaults: 3.
-        embed_dims (int): The feature dimension. Default: 96.
+        pretrain_img_size (int | tuple[int]): Size of the input image during pretraining. Default: 224.
+        in_channels (int): Number of input channels. Default: 3.
+        embed_dims (int): Feature dimension. Default: 96.
         patch_size (int | tuple[int]): Patch size. Default: 4.
         window_size (int): Window size. Default: 7.
-        mlp_ratio (int): Ratio of mlp hidden dim to embedding dim.
-            Default: 4.
-        depths (tuple[int]): Depths of each Swin Transformer stage.
-            Default: (2, 2, 6, 2).
-        num_heads (tuple[int]): Parallel attention heads of each Swin
-            Transformer stage. Default: (3, 6, 12, 24).
-        strides (tuple[int]): The patch merging or patch embedding stride of
-            each Swin Transformer stage. (In swin, we set kernel size equal to
-            stride.) Default: (4, 2, 2, 2).
-        out_indices (tuple[int]): Output from which stages.
-            Default: (0, 1, 2, 3).
-        qkv_bias (bool, optional): If True, add a learnable bias to query, key,
-            value. Default: True
-        qk_scale (float | None, optional): Override default qk scale of
-            head_dim ** -0.5 if set. Default: None.
-        patch_norm (bool): If add a norm layer for patch embed and patch
-            merging. Default: True.
-        drop_rate (float): Dropout rate. Defaults: 0.
-        attn_drop_rate (float): Attention dropout rate. Default: 0.
-        drop_path_rate (float): Stochastic depth rate. Defaults: 0.1.
-        use_abs_pos_embed (bool): If True, add absolute position embedding to
-            the patch embedding. Defaults: False.
-        act_cfg (dict): Config dict for activation layer.
-            Default: dict(type='GELU').
-        norm_cfg (dict): Config dict for normalization layer at
-            output of backone. Defaults: dict(type='LN').
-        with_cp (bool, optional): Use checkpoint or not. Using checkpoint
-            will save some memory while slowing down the training speed.
-            Default: False.
-        pretrained (str, optional): model pretrained path. Default: None.
-        convert_weights (bool): The flag indicates whether the
-            pre-trained model is from the original repo. We may need
-            to convert some keys to make it compatible.
-            Default: False.
-        frozen_stages (int): Stages to be frozen (stop grad and set eval mode).
-            Default: -1 (-1 means not freezing any parameters).
-        init_cfg (dict, optional): The Config for initialization.
-            Defaults to None.
+        mlp_ratio (int): Ratio of MLP hidden dimension to embedding dimension. Default: 4.
+        depths (tuple[int]): Depths of each Swin Transformer stage. Default: (2, 2, 6, 2).
+        num_heads (tuple[int]): Number of attention heads for each stage. Default: (3, 6, 12, 24).
+        strides (tuple[int]): Strides for patch embedding and merging. Default: (4, 2, 2, 2).
+        out_indices (tuple[int]): Indices of stages to output. Default: (0, 1, 2, 3).
+        qkv_bias (bool, optional): If True, add a learnable bias to q, k, v. Default: True.
+        qk_scale (float | None, optional): Override default qk scale of `head_dim ** -0.5` if set. Default: None.
+        patch_norm (bool): Whether to add a normalization layer for patch embedding and merging. Default: True.
+        drop_rate (float): Dropout rate. Default: 0.0.
+        attn_drop_rate (float): Dropout rate for attention weights. Default: 0.0.
+        drop_path_rate (float): Stochastic depth rate. Default: 0.1.
+        use_abs_pos_embed (bool): Whether to use absolute position embedding. Default: False.
+        act_cfg (dict): Activation function configuration. Default: `dict(type='GELU')`.
+        norm_cfg (dict): Normalization layer configuration. Default: `dict(type='LN')`.
+        with_cp (bool, optional): Whether to use checkpointing to save memory. Default: False.
+        pretrained (str | None, optional): Path to pretrained weights. Default: None.
+        convert_weights (bool): Whether to convert weights from the original implementation. Default: False.
+        frozen_stages (int): Number of stages to freeze. Default: -1 (no freezing).
+        init_cfg (dict | None, optional): Initialization configuration. Default: None.
     """
 
     def __init__(
@@ -735,6 +722,14 @@ class SwinTransformer(BaseModule):
             self.load_state_dict(state_dict, False)
 
     def forward(self, x):
+        """Forward pass for the Swin Transformer.
+
+        Args:
+            x (Tensor): Input tensor of shape `(B, C, H, W)`.
+
+        Returns:
+            list[Tensor]: List of output tensors from the specified stages.
+        """
         x, hw_shape = self.patch_embed(x)
 
         if self.use_abs_pos_embed:

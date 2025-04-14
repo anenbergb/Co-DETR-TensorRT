@@ -1,5 +1,4 @@
 import math
-import warnings
 
 import torch
 import torch.nn as nn
@@ -14,11 +13,16 @@ from codetr.multi_scale_deformable_attention import MultiScaleDeformableAttentio
 
 
 class DetrTransformerEncoder(BaseModule):
-    """TransformerEncoder of DETR.
+    """Transformer Encoder for DETR.
 
     Args:
-        post_norm_cfg (dict): Config of last normalization layer. Default：
-            `LN`. Only used when `self.pre_norm` is `True`
+        post_norm_cfg (dict, optional): Configuration for the last normalization layer.
+            Default: `dict(type="LN")`. Only used when `self.pre_norm` is `True`.
+        with_cp (int, optional): Placeholder argument, currently ignored. Default: -1.
+        transformerlayers (dict): Configuration for the transformer layers.
+            Must include the key `"type": "BaseTransformerLayer"`.
+        num_layers (int): Number of transformer layers.
+        init_cfg (dict, optional): Initialization configuration. Default: None.
     """
 
     def __init__(
@@ -57,30 +61,21 @@ class DetrTransformerEncoder(BaseModule):
         key_padding_mask=None,
         **kwargs,
     ):
-        """Forward function for `TransformerCoder`.
+        """Forward pass for the Transformer Encoder.
 
         Args:
-            query (Tensor): Input query with shape
-                `(num_queries, bs, embed_dims)`.
-            key (Tensor): The key tensor with shape
-                `(num_keys, bs, embed_dims)`.
-            value (Tensor): The value tensor with shape
-                `(num_keys, bs, embed_dims)`.
-            query_pos (Tensor): The positional encoding for `query`.
+            query (Tensor): Input query tensor of shape `(num_queries, bs, embed_dims)`.
+            key (Tensor): Key tensor of shape `(num_keys, bs, embed_dims)`.
+            value (Tensor): Value tensor of shape `(num_keys, bs, embed_dims)`.
+            query_pos (Tensor, optional): Positional encoding for the query. Default: None.
+            key_pos (Tensor, optional): Positional encoding for the key. Default: None.
+            attn_masks (list[Tensor], optional): Attention masks for each layer. Default: None.
+            query_key_padding_mask (Tensor, optional): Padding mask for the query of shape `(bs, num_queries)`.
                 Default: None.
-            key_pos (Tensor): The positional encoding for `key`.
-                Default: None.
-            attn_masks (List[Tensor], optional): Each element is 2D Tensor
-                which is used in calculation of corresponding attention in
-                operation_order. Default: None.
-            query_key_padding_mask (Tensor): ByteTensor for `query`, with
-                shape [bs, num_queries]. Only used in self-attention
-                Default: None.
-            key_padding_mask (Tensor): ByteTensor for `query`, with
-                shape [bs, num_keys]. Default: None.
+            key_padding_mask (Tensor, optional): Padding mask for the key of shape `(bs, num_keys)`. Default: None.
 
         Returns:
-            Tensor:  results with shape [num_queries, bs, embed_dims].
+            Tensor: Output tensor of shape `(num_queries, bs, embed_dims)`.
         """
         for layer in self.layers:
             query = layer(
@@ -98,6 +93,17 @@ class DetrTransformerEncoder(BaseModule):
 
 
 def build_MLP(input_dim, hidden_dim, output_dim, num_layers):
+    """Builds a Multi-Layer Perceptron (MLP).
+
+    Args:
+        input_dim (int): Input dimension of the MLP.
+        hidden_dim (int): Hidden layer dimension.
+        output_dim (int): Output dimension of the MLP.
+        num_layers (int): Number of layers in the MLP. Must be greater than 1.
+
+    Returns:
+        nn.Sequential: A sequential container of MLP layers.
+    """
     assert num_layers > 1, f"num_layers should be greater than 1 but got {num_layers}"
     h = [hidden_dim] * (num_layers - 1)
     layers = list()
@@ -111,6 +117,16 @@ def build_MLP(input_dim, hidden_dim, output_dim, num_layers):
 
 
 class DinoTransformerDecoder(BaseModule):
+    """Transformer Decoder for DINO.
+
+    Args:
+        return_intermediate (bool, optional): Whether to return intermediate results.
+            Default: False.
+        transformerlayers (dict): Configuration for the transformer layers.
+            Must include the key `"type": "DetrTransformerDecoderLayer"`.
+        num_layers (int): Number of transformer layers.
+        init_cfg (dict, optional): Initialization configuration. Default: None.
+    """
 
     def __init__(
         self,
@@ -138,8 +154,15 @@ class DinoTransformerDecoder(BaseModule):
 
     @staticmethod
     def gen_sineembed_for_position(pos_tensor, pos_feat):
-        # n_query, bs, _ = pos_tensor.size()
-        # sineembed_tensor = torch.zeros(n_query, bs, 256)
+        """Generates sine embeddings for positional encoding.
+
+        Args:
+            pos_tensor (Tensor): Input position tensor of shape `(n_query, bs, 2 or 4)`.
+            pos_feat (int): Number of positional features.
+
+        Returns:
+            Tensor: Sine embeddings of shape `(n_query, bs, pos_feat)`.
+        """
         scale = 2 * math.pi
         dim_t = torch.arange(pos_feat, dtype=pos_tensor.dtype, device=pos_tensor.device)
         dim_t = 10000 ** (2 * (dim_t // 2) / pos_feat)
@@ -166,12 +189,20 @@ class DinoTransformerDecoder(BaseModule):
         return pos
 
     def forward(self, query, *args, reference_points=None, valid_ratios=None, reg_branches=None, **kwargs):
-        """
-        Updated to not return intermediate results
+        """Forward pass for the Transformer Decoder.
 
-        reference_points are unactivated (to avoid inverse_sigmoid)
-        """
+        Args:
+            query (Tensor): Input query tensor of shape `(num_queries, bs, embed_dims)`.
+            reference_points (Tensor, optional): Reference points for the decoder.
+                Default: None.
+            valid_ratios (Tensor, optional): Ratios of valid points on the feature map.
+                Default: None.
+            reg_branches (list[nn.Module], optional): Regression branches for bounding box refinement.
+                Default: None.
 
+        Returns:
+            Tuple[Tensor, Tensor]: Final state and reference points after decoding.
+        """
         output = query
         for lid, layer in enumerate(self.layers):
             if reference_points.shape[-1] == 4:
@@ -246,23 +277,16 @@ class DetrTransformerDecoderLayer(BaseTransformerLayer):
 
 
 def get_reference_points(mlvl_feats, valid_ratios, device):
-    """Get the reference points used in decoder.
+    """Generates reference points for the decoder.
 
     Args:
-        mlvl_feats (list[Tensor]): The feature maps from different
-            levels, each has shape (bs, embed_dims, h, w).
-    
-        valid_ratios (Tensor): The ratios of valid
-            points on the feature map, has shape
-            (bs, num_levels, 2)
-        device (obj:`device`): The device where
-            reference_points should be.
+        mlvl_feats (list[Tensor]): Feature maps from different levels, each of shape `(bs, embed_dims, h, w)`.
+        valid_ratios (Tensor): Ratios of valid points on the feature map, of shape `(bs, num_levels, 2)`.
+        device (torch.device): Device where the reference points should be created.
 
     Returns:
-        Tensor: reference points used in decoder, has \
-            shape (bs, num_keys, num_levels, 2).
+        Tensor: Reference points of shape `(bs, num_keys, num_levels, 2)`.
     """
-
     reference_points_list = []
     for lvl, feat in enumerate(mlvl_feats):
         bs, _, H, W = feat.shape
@@ -281,17 +305,14 @@ def get_reference_points(mlvl_feats, valid_ratios, device):
 
 
 def make_encoder_output_proposals(reference_points, level_counts):
-    """Generate proposals from encoded memory.
+    """Generates proposals from encoded memory.
 
     Args:
-        reference_points (Tensor): The reference points \
-            used in encoder, has shape (bs, num_keys, 2).
-        level_counts (Tensor): The number of points on \
-            feature map from all level, has shape (num_levels,).
+        reference_points (Tensor): Reference points of shape `(bs, num_keys, 2)`.
+        level_counts (Tensor): Number of points on each feature map level, of shape `(num_levels,)`.
+
     Returns:
-        - output_proposals (Tensor): The normalized proposal \
-            after a inverse sigmoid, has shape \
-            (bs, num_keys, 4).
+        Tensor: Normalized proposals of shape `(bs, num_keys, 4)`.
     """
     batch_size, num_keys = reference_points.shape[:2]
     # Create values tensor [0, 1, 2, 3, 4]
@@ -327,26 +348,15 @@ def get_lvl_repeated(mlvl_masks, dtype=torch.float32):
 
 
 def apply_mask_to_proposal_and_memory(output_proposals, memory, memory_padding_mask):
-    """
-    Args:
-        output_proposals (Tensor): the normalized proposals,
-            shape (bs, num_key, 4).  num_key is equal the
-            number of points on feature map from all level.
+    """Applies masking to proposals and memory.
 
-        memory (Tensor) : The output of encoder,
-            has shape (bs, num_key, embed_dim).  num_key is
-            equal the number of points on feature map from
-            all level.
-        memory_padding_mask (Tensor): Padding mask for memory.
-            has shape (bs, num_key).
-            0 within image
-            1 in padded_region
-    
+    Args:
+        output_proposals (Tensor): Normalized proposals of shape `(bs, num_keys, 4)`.
+        memory (Tensor): Encoder output of shape `(bs, num_keys, embed_dim)`.
+        memory_padding_mask (Tensor): Padding mask for memory of shape `(bs, num_keys)`.
+
     Returns:
-        - output_proposals (Tensor): The normalized proposal \
-            after masking, has shape (bs, num_keys, 4).
-        - output_memory (Tensor): The output of encoder \
-            after masking, has shape (bs, num_keys, embed_dim).
+        Tuple[Tensor, Tensor]: Masked proposals and memory.
     """
     # log(0.1 / (1 - 0.1)) = -4.6
     # log(0.99 / (1 - 0.99)) = 4.6
@@ -371,7 +381,15 @@ def apply_mask_to_proposal_and_memory(output_proposals, memory, memory_padding_m
 
 
 def get_valid_ratio(mask, dtype=torch.float32):
-    """Get the valid ratios of feature maps of all level."""
+    """Calculates valid ratios for feature maps at all levels.
+
+    Args:
+        mask (Tensor): Mask tensor of shape `(bs, h, w)`.
+        dtype (torch.dtype, optional): Data type for the output. Default: torch.float32.
+
+    Returns:
+        Tensor: Valid ratios of shape `(bs, 2)`.
+    """
     _, H, W = mask.shape
     valid_H = torch.sum(~mask[:, :, 0], 1).to(dtype)
     valid_W = torch.sum(~mask[:, 0, :], 1).to(dtype)
@@ -382,6 +400,20 @@ def get_valid_ratio(mask, dtype=torch.float32):
 
 
 class CoDinoTransformer(BaseModule):
+    """Transformer for Co-DINO.
+
+    Args:
+        with_pos_coord (bool, optional): Whether to use positional coordinates. Default: True.
+        with_coord_feat (bool, optional): Whether to use coordinate features. Default: True.
+        num_co_heads (int, optional): Number of co-heads. Default: 1.
+        as_two_stage (bool, optional): Whether to use two-stage decoding. Default: False.
+        num_feature_levels (int, optional): Number of feature levels. Default: 4.
+        two_stage_num_proposals (int, optional): Number of proposals for two-stage decoding. Default: 300.
+        encoder (dict): Configuration for the encoder.
+        decoder (dict): Configuration for the decoder.
+        init_cfg (dict, optional): Initialization configuration. Default: None.
+    """
+
     def __init__(
         self,
         with_pos_coord=True,
@@ -432,7 +464,7 @@ class CoDinoTransformer(BaseModule):
                         self.pos_feats_norm.append(nn.LayerNorm(self.embed_dims))
 
     def init_weights(self):
-        """Initialize the transformer weights."""
+        """Initializes the weights of the transformer."""
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
@@ -453,6 +485,18 @@ class CoDinoTransformer(BaseModule):
         cls_branches=None,
         **kwargs,
     ):
+        """Forward pass for the Co-DINO Transformer.
+
+        Args:
+            mlvl_feats (list[Tensor]): Multi-level feature maps, each of shape `(bs, c, h, w)`.
+            mlvl_masks (list[Tensor]): Multi-level masks, each of shape `(bs, h, w)`.
+            mlvl_pos_embeds (list[Tensor]): Multi-level positional embeddings, each of shape `(bs, c, h, w)`.
+            reg_branches (list[nn.Module], optional): Regression branches for bounding box refinement. Default: None.
+            cls_branches (list[nn.Module], optional): Classification branches for object detection. Default: None.
+
+        Returns:
+            Tuple[Tensor, Tensor]: Final state and reference points after decoding.
+        """
         assert self.as_two_stage, "as_two_stage must be True for DINO"
 
         feat_flatten = []

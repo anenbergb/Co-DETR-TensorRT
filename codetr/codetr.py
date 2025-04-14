@@ -1,15 +1,10 @@
-import copy
-from typing import Tuple, Union, Optional, List
+from typing import Tuple, Optional
 import warnings
 
-import torch
 import torch.nn as nn
 from torch import Tensor
 
-from mmdet.models.detectors.base import BaseDetector
 from mmdet.registry import MODELS
-from mmdet.structures import OptSampleList, SampleList
-from mmdet.utils import InstanceList, OptConfigType, OptMultiConfig
 from mmdet.evaluation import get_classes
 
 from mmengine.config import Config
@@ -20,6 +15,22 @@ from codetr.co_dino_head import CoDINOHead
 
 
 class CoDETR(nn.Module):
+    """CoDETR: A model for object detection using a Swin Transformer backbone.
+
+    This class implements the CoDETR model, which consists of a Swin Transformer backbone,
+    an optional neck, and a CoDINO head for object detection. It supports training and
+    inference configurations.
+
+    Args:
+        backbone (dict): Configuration for the Swin Transformer backbone.
+        neck (dict, optional): Configuration for the neck module. Default: None.
+        query_head (dict): Configuration for the CoDINO head.
+        train_cfg (list[dict | None], optional): Training configuration for the model.
+            Default: [None, None].
+        test_cfg (list[dict | None], optional): Testing configuration for the model.
+            Default: [None, None].
+        **kwargs: Additional keyword arguments.
+    """
 
     def __init__(
         self,
@@ -30,6 +41,12 @@ class CoDETR(nn.Module):
         test_cfg=[None, None],
         **kwargs,
     ):
+        """Initializes the CoDETR model.
+
+        Raises:
+            AssertionError: If the backbone type is not "SwinTransformer".
+            AssertionError: If the query head type is not "CoDINOHead".
+        """
         super().__init__()
         # eval_module is detr
 
@@ -49,18 +66,24 @@ class CoDETR(nn.Module):
         self.query_head.init_weights()
 
     def forward(self, batch_inputs: Tensor, img_masks: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
-        """Predict results from a batch of inputs and data samples with post-
-        processing.
+        """Predict results from a batch of inputs and data samples
 
         Args:
-            batch_inputs (Tensor): Inputs, has shape (bs, 3, H, W).
-            img_masks (Tensor): Masks for the input images, has shape (bs, H, W).
+            batch_inputs (Tensor): Input images of shape `(bs, 3, H, W)`, where:
+                - `bs`: Batch size.
+                - `3`: Number of input channels (RGB).
+                - `H, W`: Height and width of the input images.
+            img_masks (Tensor): Masks for the input images of shape `(bs, H, W)`, where:
+                - `bs`: Batch size.
+                - `H, W`: Height and width of the input images.
 
         Returns:
             Tuple[Tensor, Tensor, Tensor]:
-                detected_boxes: (bs,num_boxes,4) where num_boxes is typicaly 300
-                scores: (bs,num_boxes)
-                labels: (bs,num_boxes)
+                - detected_boxes (Tensor): Bounding boxes of shape `(bs, num_boxes, 4)`, where:
+                    - `num_boxes`: Number of detected boxes (typically 300).
+                    - `4`: Coordinates of each box `(x1, y1, x2, y2)`.
+                - scores (Tensor): Confidence scores of shape `(bs, num_boxes)`.
+                - labels (Tensor): Class labels of shape `(bs, num_boxes)`.
         """
         # (bs,dim,H,W) -> List[ (bs,dim,H,W), ...]
         image_feats = self.backbone(batch_inputs)
@@ -70,6 +93,23 @@ class CoDETR(nn.Module):
 
 
 def get_dataset_meta(checkpoint):
+    """Extract dataset metadata from a checkpoint.
+
+    This function retrieves the dataset metadata (e.g., class names and palette)
+    from the checkpoint's metadata. If the metadata is not available, it defaults
+    to COCO classes.
+
+    Args:
+        checkpoint (dict): The checkpoint containing metadata.
+
+    Returns:
+        dict: A dictionary containing dataset metadata, including:
+            - `classes` (list[str]): List of class names.
+            - `palette` (str): Color palette for visualization (default: "coco").
+
+    Raises:
+        UserWarning: If the dataset metadata or class names are not found in the checkpoint.
+    """
     checkpoint_meta = checkpoint.get("meta", {})
     # save the dataset_meta in the model for convenience
     if "dataset_meta" in checkpoint_meta:
@@ -88,8 +128,30 @@ def get_dataset_meta(checkpoint):
     return dataset_meta
 
 
-def build_CoDETR(model_file: str, weights_file: Optional[str] = None, device: str = "cuda") -> CoDETR:
-    """Build CoDETR model from model file and weights file."""
+def build_CoDETR(model_file: str, weights_file: Optional[str] = None, device: str = "cuda") -> Tuple[CoDETR, dict]:
+    """Build the CoDETR model from a configuration file and optional weights file.
+
+    This function constructs the CoDETR model using the provided configuration file
+    and optionally loads pretrained weights. The model is moved to the specified device
+    and set to evaluation mode.
+
+    Args:
+        model_file (str): Path to the model configuration file.
+        weights_file (str, optional): Path to the pretrained weights file. Default: None.
+        device (str): Device to load the model onto (e.g., "cuda" or "cpu"). Default: "cuda".
+
+    Returns:
+        Tuple[CoDETR, dict]: A tuple containing:
+            - The CoDETR model instance.
+            - The dataset metadata (e.g., class names and palette).
+
+    Raises:
+        AssertionError: If the model type in the configuration is not "CoDETR".
+
+    Notes:
+        - If `weights_file` is not provided, the model is returned without loading weights.
+        - The `pretrained` field in the configuration is removed to prevent unnecessary loading.
+    """
     cfg = Config.fromfile(model_file)
     # Delete the `pretrained` field to prevent model from loading the
     # the pretrained weights unnecessarily.

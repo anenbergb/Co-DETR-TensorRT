@@ -1,4 +1,3 @@
-# Copyright (c) OpenMMLab. All rights reserved.
 import copy
 import math
 import warnings
@@ -22,20 +21,15 @@ from codetr.multi_scale_deformable_attention import MultiScaleDeformableAttentio
 class AdaptivePadding(nn.Module):
     """Applies padding adaptively to the input.
 
-    This module can make input get fully covered by filter
-    you specified. It support two modes "same" and "corner". The
-    "same" mode is same with "SAME" padding mode in TensorFlow, pad
-    zero around input. The "corner"  mode would pad zero
-    to bottom right.
+    This module ensures that the input is fully covered by the specified filter.
+    It supports two modes: "same" and "corner". The "same" mode pads zeros
+    around the input, while the "corner" mode pads zeros to the bottom-right.
 
     Args:
         kernel_size (int | tuple): Size of the kernel. Default: 1.
         stride (int | tuple): Stride of the filter. Default: 1.
-        dilation (int | tuple): Spacing between kernel elements.
-            Default: 1.
-        padding (str): Support "same" and "corner", "corner" mode
-            would pad zero to bottom right, and "same" mode would
-            pad zero around input. Default: "corner".
+        dilation (int | tuple): Spacing between kernel elements. Default: 1.
+        padding (str): Padding mode, either "same" or "corner". Default: "corner".
 
     Example:
         >>> kernel_size = 16
@@ -68,14 +62,13 @@ class AdaptivePadding(nn.Module):
         self.dilation = dilation
 
     def get_pad_shape(self, input_shape):
-        """Calculate the padding size of input.
+        """Calculate the padding size for the input.
 
         Args:
-            input_shape (:obj:`torch.Size`): arrange as (H, W).
+            input_shape (torch.Size): Input shape as (H, W).
 
         Returns:
-            Tuple[int]: The padding size along the
-            original H and W directions
+            Tuple[int]: Padding size along the height and width directions.
         """
         input_h, input_w = input_shape
         kernel_h, kernel_w = self.kernel_size
@@ -87,13 +80,13 @@ class AdaptivePadding(nn.Module):
         return pad_h, pad_w
 
     def forward(self, x):
-        """Add padding to `x`
+        """Add adaptive padding to the input tensor.
 
         Args:
-            x (Tensor): Input tensor has shape (B, C, H, W).
+            x (Tensor): Input tensor of shape (B, C, H, W).
 
         Returns:
-            Tensor: The tensor with adaptive padding
+            Tensor: Tensor with adaptive padding applied.
         """
         pad_h, pad_w = self.get_pad_shape(x.size()[-2:])
         if pad_h > 0 or pad_w > 0:
@@ -107,29 +100,20 @@ class AdaptivePadding(nn.Module):
 class PatchEmbed(BaseModule):
     """Image to Patch Embedding.
 
-    We use a conv layer to implement PatchEmbed.
+    Converts an input image into patch embeddings using a convolutional layer.
 
     Args:
-        in_channels (int): The num of input channels. Default: 3
-        embed_dims (int): The dimensions of embedding. Default: 768
-        conv_type (str): The type of convolution
-            to generate patch embedding. Default: "Conv2d".
-        kernel_size (int): The kernel_size of embedding conv. Default: 16.
-        stride (int): The slide stride of embedding conv.
-            Default: 16.
-        padding (int | tuple | string): The padding length of
-            embedding conv. When it is a string, it means the mode
-            of adaptive padding, support "same" and "corner" now.
-            Default: "corner".
-        dilation (int): The dilation rate of embedding conv. Default: 1.
-        bias (bool): Bias of embed conv. Default: True.
-        norm_cfg (dict, optional): Config dict for normalization layer.
-            Default: None.
-        input_size (int | tuple | None): The size of input, which will be
-            used to calculate the out size. Only works when `dynamic_size`
-            is False. Default: None.
-        init_cfg (`mmcv.ConfigDict`, optional): The Config for initialization.
-            Default: None.
+        in_channels (int): Number of input channels. Default: 3.
+        embed_dims (int): Dimension of the embedding. Default: 768.
+        conv_type (str): Type of convolution to generate patch embeddings. Default: "Conv2d".
+        kernel_size (int): Kernel size of the embedding convolution. Default: 16.
+        stride (int): Stride of the embedding convolution. Default: 16.
+        padding (int | tuple | str): Padding for the embedding convolution. Supports "same" and "corner". Default: "corner".
+        dilation (int): Dilation rate of the embedding convolution. Default: 1.
+        bias (bool): Whether to use bias in the convolution. Default: True.
+        norm_cfg (dict, optional): Configuration for the normalization layer. Default: None.
+        input_size (int | tuple | None): Input size for calculating output size. Default: None.
+        init_cfg (mmcv.ConfigDict, optional): Initialization configuration. Default: None.
     """
 
     def __init__(
@@ -204,18 +188,16 @@ class PatchEmbed(BaseModule):
             self.init_out_size = None
 
     def forward(self, x):
-        """
+        """Forward pass for Patch Embedding.
+
         Args:
-            x (Tensor): Has shape (B, C, H, W). In most case, C is 3.
+            x (Tensor): Input tensor of shape (B, C, H, W).
 
         Returns:
-            tuple: Contains merged results and its spatial shape.
-
-            - x (Tensor): Has shape (B, out_h * out_w, embed_dims)
-            - out_size (tuple[int]): Spatial shape of x, arrange as
-              (out_h, out_w).
+            Tuple[Tensor, Tuple[int, int]]:
+                - x (Tensor): Patch embeddings of shape (B, num_patches, embed_dims).
+                - out_size (Tuple[int, int]): Spatial shape of the output as (H, W).
         """
-
         if self.adaptive_padding:
             x = self.adaptive_padding(x)
 
@@ -228,35 +210,21 @@ class PatchEmbed(BaseModule):
 
 
 class PatchMerging(BaseModule):
-    """Merge patch feature map.
+    """Merge patch feature maps.
 
-    This layer groups feature map by kernel_size, and applies norm and linear
-    layers to the grouped feature map ((used in Swin Transformer)).
-    Our implementation uses `nn.Unfold` to
-    merge patches, which is about 25% faster than the original
-    implementation. However, we need to modify pretrained
-    models for compatibility.
+    Groups feature maps by kernel size and applies normalization and linear layers
+    to the grouped feature maps. This is used in Swin Transformer.
 
     Args:
-        in_channels (int): The num of input channels.
-            to gets fully covered by filter and stride you specified.
-        out_channels (int): The num of output channels.
-        kernel_size (int | tuple, optional): the kernel size in the unfold
-            layer. Defaults to 2.
-        stride (int | tuple, optional): the stride of the sliding blocks in the
-            unfold layer. Default: None. (Would be set as `kernel_size`)
-        padding (int | tuple | string ): The padding length of
-            embedding conv. When it is a string, it means the mode
-            of adaptive padding, support "same" and "corner" now.
-            Default: "corner".
-        dilation (int | tuple, optional): dilation parameter in the unfold
-            layer. Default: 1.
-        bias (bool, optional): Whether to add bias in linear layer or not.
-            Defaults: False.
-        norm_cfg (dict, optional): Config dict for normalization layer.
-            Default: dict(type='LN').
-        init_cfg (dict, optional): The extra config for initialization.
-            Default: None.
+        in_channels (int): Number of input channels.
+        out_channels (int): Number of output channels.
+        kernel_size (int | tuple, optional): Kernel size for the unfolding layer. Default: 2.
+        stride (int | tuple, optional): Stride for the sliding blocks. Default: None (set to kernel_size).
+        padding (int | tuple | str): Padding for the unfolding layer. Supports "same" and "corner". Default: "corner".
+        dilation (int | tuple, optional): Dilation for the unfolding layer. Default: 1.
+        bias (bool, optional): Whether to add bias in the linear layer. Default: False.
+        norm_cfg (dict, optional): Configuration for the normalization layer. Default: dict(type='LN').
+        init_cfg (dict, optional): Initialization configuration. Default: None.
     """
 
     def __init__(
@@ -305,18 +273,16 @@ class PatchMerging(BaseModule):
         self.reduction = nn.Linear(sample_dim, out_channels, bias=bias)
 
     def forward(self, x, input_size):
-        """
+        """Forward pass for Patch Merging.
+
         Args:
-            x (Tensor): Has shape (B, H*W, C_in).
-            input_size (tuple[int]): The spatial shape of x, arrange as (H, W).
-                Default: None.
+            x (Tensor): Input tensor of shape (B, H*W, C_in).
+            input_size (Tuple[int, int]): Spatial shape of the input as (H, W).
 
         Returns:
-            tuple: Contains merged results and its spatial shape.
-
-            - x (Tensor): Has shape (B, Merged_H * Merged_W, C_out)
-            - out_size (tuple[int]): Spatial shape of x, arrange as
-              (Merged_H, Merged_W).
+            Tuple[Tensor, Tuple[int, int]]:
+                - x (Tensor): Merged feature map of shape (B, Merged_H * Merged_W, C_out).
+                - output_size (Tuple[int, int]): Spatial shape of the output as (Merged_H, Merged_W).
         """
         B, L, C = x.shape
         assert isinstance(input_size, Sequence), f"Expect " f"input_size is " f"`Sequence` " f"but get {input_size}"
@@ -350,25 +316,18 @@ class PatchMerging(BaseModule):
 
 
 class MultiheadAttention(BaseModule):
-    """A wrapper for ``torch.nn.MultiheadAttention``.
+    """A wrapper for `torch.nn.MultiheadAttention`.
 
-    This module implements MultiheadAttention with identity connection,
-    and positional encoding  is also passed as input.
+    Implements multi-head attention with identity connection and optional positional encoding.
 
     Args:
-        embed_dims (int): The embedding dimension.
-        num_heads (int): Parallel attention heads.
-        attn_drop (float): A Dropout layer on attn_output_weights.
-            Default: 0.0.
-        proj_drop (float): A Dropout layer after `nn.MultiheadAttention`.
-            Default: 0.0.
-        dropout_layer (obj:`ConfigDict`): The dropout_layer used
-            when adding the shortcut.
-        init_cfg (obj:`mmcv.ConfigDict`): The Config for initialization.
-            Default: None.
-        batch_first (bool): When it is True,  Key, Query and Value are shape of
-            (batch, n, embed_dim), otherwise (n, batch, embed_dim).
-             Default to False.
+        embed_dims (int): Embedding dimension.
+        num_heads (int): Number of attention heads.
+        attn_drop (float): Dropout probability for attention weights. Default: 0.0.
+        proj_drop (float): Dropout probability after the attention layer. Default: 0.0.
+        dropout_layer (dict): Configuration for the dropout layer. Default: dict(type="Dropout", drop_prob=0.0).
+        init_cfg (mmcv.ConfigDict, optional): Initialization configuration. Default: None.
+        batch_first (bool): Whether the input tensors are batch-first (B, N, C). Default: False.
     """
 
     def __init__(
@@ -415,46 +374,21 @@ class MultiheadAttention(BaseModule):
         key_padding_mask=None,
         **kwargs,
     ):
-        """Forward function for `MultiheadAttention`.
-
-        **kwargs allow passing a more general data flow when combining
-        with other operations in `transformerlayer`.
+        """Forward pass for Multihead Attention.
 
         Args:
-            query (Tensor): The input query with shape [num_queries, bs,
-                embed_dims] if self.batch_first is False, else
-                [bs, num_queries embed_dims].
-            key (Tensor): The key tensor with shape [num_keys, bs,
-                embed_dims] if self.batch_first is False, else
-                [bs, num_keys, embed_dims] .
-                If None, the ``query`` will be used. Defaults to None.
-            value (Tensor): The value tensor with same shape as `key`.
-                Same in `nn.MultiheadAttention.forward`. Defaults to None.
-                If None, the `key` will be used.
-            identity (Tensor): This tensor, with the same shape as x,
-                will be used for the identity link.
-                If None, `x` will be used. Defaults to None.
-            query_pos (Tensor): The positional encoding for query, with
-                the same shape as `x`. If not None, it will
-                be added to `x` before forward function. Defaults to None.
-            key_pos (Tensor): The positional encoding for `key`, with the
-                same shape as `key`. Defaults to None. If not None, it will
-                be added to `key` before forward function. If None, and
-                `query_pos` has the same shape as `key`, then `query_pos`
-                will be used for `key_pos`. Defaults to None.
-            attn_mask (Tensor): ByteTensor mask with shape [num_queries,
-                num_keys]. Same in `nn.MultiheadAttention.forward`.
-                Defaults to None.
-            key_padding_mask (Tensor): ByteTensor with shape [bs, num_keys].
-                Defaults to None.
+            query (Tensor): Query tensor of shape (num_queries, bs, embed_dims) or (bs, num_queries, embed_dims).
+            key (Tensor, optional): Key tensor of shape (num_keys, bs, embed_dims) or (bs, num_keys, embed_dims). Default: None.
+            value (Tensor, optional): Value tensor of the same shape as `key`. Default: None.
+            identity (Tensor, optional): Identity tensor for residual connection. Default: None.
+            query_pos (Tensor, optional): Positional encoding for the query. Default: None.
+            key_pos (Tensor, optional): Positional encoding for the key. Default: None.
+            attn_mask (Tensor, optional): Attention mask of shape (num_queries, num_keys). Default: None.
+            key_padding_mask (Tensor, optional): Padding mask for the key of shape (bs, num_keys). Default: None.
 
         Returns:
-            Tensor: forwarded results with shape
-            [num_queries, bs, embed_dims]
-            if self.batch_first is False, else
-            [bs, num_queries embed_dims].
+            Tensor: Output tensor of shape (num_queries, bs, embed_dims) or (bs, num_queries, embed_dims).
         """
-
         if key is None:
             key = query
         if value is None:
@@ -493,27 +427,18 @@ class MultiheadAttention(BaseModule):
 
 
 class FFN(BaseModule):
-    """Implements feed-forward networks (FFNs) with identity connection.
+    """Feed-Forward Network (FFN) with identity connection.
 
     Args:
-        embed_dims (int): The feature dimension. Same as
-            `MultiheadAttention`. Defaults: 256.
-        feedforward_channels (int): The hidden dimension of FFNs.
-            Defaults: 1024.
-        num_fcs (int, optional): The number of fully-connected layers in
-            FFNs. Default: 2.
-        act_cfg (dict, optional): The activation config for FFNs.
-            Default: dict(type='ReLU')
-        ffn_drop (float, optional): Probability of an element to be
-            zeroed in FFN. Default 0.0.
-        add_identity (bool, optional): Whether to add the
-            identity connection. Default: `True`.
-        dropout_layer (obj:`ConfigDict`): The dropout_layer used
-            when adding the shortcut.
-        init_cfg (obj:`mmcv.ConfigDict`): The Config for initialization.
-            Default: None.
-        layer_scale_init_value (float): Initial value of scale factor in
-            LayerScale. Default: 1.0
+        embed_dims (int): Feature dimension. Default: 256.
+        feedforward_channels (int): Hidden dimension of the FFN. Default: 1024.
+        num_fcs (int): Number of fully connected layers. Default: 2.
+        act_cfg (dict): Configuration for the activation function. Default: dict(type="ReLU").
+        ffn_drop (float): Dropout probability for the FFN. Default: 0.0.
+        add_identity (bool): Whether to add an identity connection. Default: True.
+        dropout_layer (dict, optional): Configuration for the dropout layer. Default: None.
+        init_cfg (mmcv.ConfigDict, optional): Initialization configuration. Default: None.
+        layer_scale_init_value (float): Initial value for LayerScale. Default: 0.0.
     """
 
     def __init__(
@@ -555,9 +480,14 @@ class FFN(BaseModule):
             self.gamma2 = nn.Identity()
 
     def forward(self, x, identity=None):
-        """Forward function for `FFN`.
+        """Forward pass for the FFN.
 
-        The function would add x to the output tensor if residue is None.
+        Args:
+            x (Tensor): Input tensor of shape (B, N, embed_dims).
+            identity (Tensor, optional): Identity tensor for residual connection. Default: None.
+
+        Returns:
+            Tensor: Output tensor of shape (B, N, embed_dims).
         """
         out = self.layers(x)
         out = self.gamma2(out)
@@ -667,7 +597,7 @@ class BaseTransformerLayer(BaseModule):
 
         index = 0
         for operation_name in operation_order:
-            if operation_name in ["self_attn", "cross_attn"]:
+            if (operation_name == "self_attn") or (operation_name == "cross_attn"):
                 if "batch_first" in attn_cfgs[index]:
                     assert self.batch_first == attn_cfgs[index]["batch_first"]
                 else:

@@ -15,31 +15,44 @@ __all__ = ["multi_scale_deformable_attention_pytorch"]
 
 
 # Registers a FakeTensor kernel (aka "meta kernel", "abstract impl")
-# that describes what the properties of the output Tensor are given
-# the properties of the input Tensor. The FakeTensor kernel is necessary
-# for the op to work performantly with torch.compile.
+# that describes the properties of the output Tensor given the properties
+# of the input Tensor. The FakeTensor kernel is necessary for the op to
+# work efficiently with `torch.compile`.
+
+
 @torch.library.register_fake("codetr::multi_scale_deformable_attention")
 def _(value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2col_step):
     """
+    FakeTensor kernel for the `codetr::multi_scale_deformable_attention` operation.
+
+    This kernel defines the expected output tensor properties based on the input
+    tensor properties. It is used for meta-programming and optimization purposes
+    with `torch.compile`.
+
     Args:
-        value (torch.Tensor): The value has shape
-            (bs, num_keys, mum_heads, embed_dims//num_heads)
-        spatial_shapes (torch.Tensor): Spatial shape of
-            each feature map, has shape (num_levels, 2),
-            last dimension 2 represent (h, w)
-        level_start_index (torch.Tensor): The start index of each level.
-            A tensor has shape ``(num_levels, )`` and can be represented
-        sampling_loc (torch.Tensor): The location of sampling points,
-            has shape
-            (bs ,num_queries, num_heads, num_levels, num_points, 2),
-            the last dimension 2 represent (x, y).
-        attn_weight (torch.Tensor): The weight of sampling points
-            used when calculate the attention, has shape
-            (bs ,num_queries, num_heads, num_levels, num_points),
-        im2col_step (int): The step used in image to column.
+        value (torch.Tensor): Input tensor of shape
+            `(bs, num_keys, num_heads, embed_dims // num_heads)`, where:
+            - `bs`: Batch size.
+            - `num_keys`: Number of keys.
+            - `num_heads`: Number of attention heads.
+            - `embed_dims`: Embedding dimensions.
+        spatial_shapes (torch.Tensor): Tensor of shape `(num_levels, 2)` representing
+            the spatial shape `(height, width)` of each feature map.
+        level_start_index (torch.Tensor): Tensor of shape `(num_levels,)` representing
+            the start index of each level in the flattened feature map.
+        sampling_loc (torch.Tensor): Tensor of shape
+            `(bs, num_queries, num_heads, num_levels, num_points, 2)` representing
+            the sampling locations. The last dimension `(2)` corresponds to `(x, y)` coordinates.
+        attn_weight (torch.Tensor): Tensor of shape
+            `(bs, num_queries, num_heads, num_levels, num_points)` representing
+            the attention weights for the sampling points.
+        im2col_step (int): Step size used in the image-to-column operation.
 
     Returns:
-        torch.Tensor: has shape (bs, num_queries, embed_dims)
+        torch.Tensor: Output tensor of shape `(bs, num_queries, embed_dims)`, where:
+            - `bs`: Batch size.
+            - `num_queries`: Number of queries.
+            - `embed_dims`: Embedding dimensions.
     """
     torch._check(value.dim() == 4)
     torch._check(spatial_shapes.dim() == 2)
@@ -170,38 +183,48 @@ def multi_scale_deformable_attention_converter(
     args: Tuple[Argument, ...],
     kwargs: Dict[str, Argument],
     name: str,
-) -> Union[trt.ITensor, Sequence[trt.ITensor]]:
+) -> trt.ITensor:
     """
-    Dynamically convert the codetr::multi_scale_deformable_attention custom op to a
-    TensorRT DeformableAttentionPlugin node in the TRT graph.
+    Converts the `codetr::multi_scale_deformable_attention` custom operation into a
+    TensorRT DeformableAttentionPlugin node within the TensorRT computation graph.
 
-    Arguments:
-        ctx : The current state of the compiler.
-            Converters primarily will manipulate ctx.net which is the
-            tensorrt.INetworkDefinition being constructed.
-        target: Target key in the call_module or call_function above.
-            eg:torch.ops.codetr.multi_scale_deformable_attention.default.
-        args: The arguments being passed to a particular Node
-            (as collected by the torch_tensorrt.dynamo.conversion.TRTInterpreter).
-            These arguments along with the kwargs are to be used to construct
-             a specific TensorRT subgraph representing the current node in the INetworkDefinition.
-        kwargs: The arguments being passed to a particular Node
-            (as collected by the torch_tensorrt.dynamo.conversion.TRTInterpreter).
-        name: String containing the name of the target
+    This function dynamically maps the custom PyTorch operation to a TensorRT plugin
+    during the compilation process, enabling efficient execution on NVIDIA GPUs.
 
-    args come from:
-      codetr.multi_scale_deformable_attention(
-         value,                # args[0]
-         spatial_shapes,       # args[1]
-         level_start_index,    # args[2]
-         sampling_loc,         # args[3]
-         attn_weight,          # args[4]
-         im2col_step           # args[5]
-      )
+    Args:
+        ctx (torch_tensorrt.dynamo.conversion.ConversionContext):
+            The current state of the compiler. This includes the TensorRT
+            `INetworkDefinition` being constructed.
+        target (Target):
+            The target key for the operation, such as
+            `torch.ops.codetr.multi_scale_deformable_attention.default`.
+        args (Tuple[Argument, ...]):
+            The arguments passed to the operation. These include:
+            - `args[0]` (torch.Tensor): `value` tensor of shape
+              `(bs, num_keys, num_heads, embed_dims // num_heads)`.
+            - `args[1]` (torch.Tensor): `spatial_shapes` tensor of shape `(num_levels, 2)`.
+            - `args[2]` (torch.Tensor): `level_start_index` tensor of shape `(num_levels,)`.
+            - `args[3]` (torch.Tensor): `sampling_loc` tensor of shape
+              `(bs, num_queries, num_heads, num_levels, num_points, 2)`.
+            - `args[4]` (torch.Tensor): `attn_weight` tensor of shape
+              `(bs, num_queries, num_heads, num_levels, num_points)`.
+            - `args[5]` (int): `im2col_step`, the step size for the image-to-column operation.
+        kwargs (Dict[str, Argument]):
+            Additional keyword arguments passed to the operation.
+        name (str):
+            The name of the target operation.
 
+    Returns:
+        trt.ITensor:
+            The output TensorRT ITensor generated by the plugin.
 
-    ctx.net is tensorrt.INetworkDefinition
+    Raises:
+        RuntimeError: If the plugin creation or layer addition fails.
 
+    Notes:
+        - The `ctx.net` object represents the TensorRT `INetworkDefinition` being constructed.
+        - The plugin is created using the TensorRT Plugin Registry and added to the network
+          as a custom layer.
     """
     PLUGIN_NAME = "DeformableAttentionPlugin"
     PLUGIN_VERSION = "1"

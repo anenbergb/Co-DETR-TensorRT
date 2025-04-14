@@ -6,37 +6,28 @@ import mmengine
 import torch
 import torch.nn as nn
 from mmengine.model import BaseModule, constant_init, xavier_init
-import codetr
 from codetr.ops import multi_scale_deformable_attention_pytorch
 
 
 class MultiScaleDeformableAttention(BaseModule):
-    """An attention module used in Deformable-Detr.
+    """An attention module used in Deformable-DETR.
 
-    `Deformable DETR: Deformable Transformers for End-to-End Object Detection.
-    <https://arxiv.org/pdf/2010.04159.pdf>`_.
+    Implements the multi-scale deformable attention mechanism as described in:
+    "Deformable DETR: Deformable Transformers for End-to-End Object Detection"
+    (https://arxiv.org/pdf/2010.04159.pdf).
 
     Args:
-        embed_dims (int): The embedding dimension of Attention.
-            Default: 256.
-        num_heads (int): Parallel attention heads. Default: 8.
-        num_levels (int): The number of feature map used in
-            Attention. Default: 4.
-        num_points (int): The number of sampling points for
-            each query in each head. Default: 4.
-        im2col_step (int): The step used in image_to_column.
-            Default: 64.
-        dropout (float): A Dropout layer on `inp_identity`.
-            Default: 0.1.
-        batch_first (bool): Key, Query and Value are shape of
-            (batch, n, embed_dim)
-            or (n, batch, embed_dim). Default to False.
-        norm_cfg (dict): Config dict for normalization layer.
-            Default: None.
-        init_cfg (obj:`mmcv.ConfigDict`): The Config for initialization.
-            Default: None.
-        value_proj_ratio (float): The expansion ratio of value_proj.
-            Default: 1.0.
+        embed_dims (int): The embedding dimension of the attention module. Default: 256.
+        num_heads (int): Number of parallel attention heads. Default: 8.
+        num_levels (int): Number of feature map levels used in attention. Default: 4.
+        num_points (int): Number of sampling points for each query in each head. Default: 4.
+        im2col_step (int): Step size used in the image-to-column operation. Default: 64.
+        dropout (float): Dropout probability for the attention output. Default: 0.1.
+        batch_first (bool): Whether the input tensors are batch-first (shape: `(batch, n, embed_dim)`).
+            Default: False.
+        norm_cfg (dict, optional): Configuration for the normalization layer. Default: None.
+        init_cfg (mmengine.ConfigDict, optional): Initialization configuration. Default: None.
+        value_proj_ratio (float): Expansion ratio for the value projection layer. Default: 1.0.
     """
 
     def __init__(
@@ -52,6 +43,12 @@ class MultiScaleDeformableAttention(BaseModule):
         init_cfg: Optional[mmengine.ConfigDict] = None,
         value_proj_ratio: float = 1.0,
     ):
+        """Initializes the MultiScaleDeformableAttention module.
+
+        Raises:
+            ValueError: If `embed_dims` is not divisible by `num_heads`.
+            Warning: If the dimension per head is not a power of 2, which may reduce CUDA efficiency.
+        """
         super().__init__(init_cfg)
         if embed_dims % num_heads != 0:
             raise ValueError(f"embed_dims must be divisible by num_heads, " f"but got {embed_dims} and {num_heads}")
@@ -88,7 +85,12 @@ class MultiScaleDeformableAttention(BaseModule):
         self.init_weights()
 
     def init_weights(self) -> None:
-        """Default initialization for Parameters of Module."""
+        """Initializes the weights of the module.
+
+        - Sampling offsets are initialized with a grid pattern.
+        - Attention weights are initialized to zero.
+        - Value and output projection layers are initialized using Xavier initialization.
+        """
         constant_init(self.sampling_offsets, 0.0)
         params = next(self.parameters())
         device = params.device
@@ -122,39 +124,31 @@ class MultiScaleDeformableAttention(BaseModule):
         level_start_index: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> torch.Tensor:
-        """Forward Function of MultiScaleDeformAttention.
+        """Forward pass for the MultiScaleDeformableAttention module.
 
         Args:
-            query (torch.Tensor): Query of Transformer with shape
-                (num_query, bs, embed_dims).
-            key (torch.Tensor): The key tensor with shape
-                `(num_key, bs, embed_dims)`.
-            value (torch.Tensor): The value tensor with shape
-                `(num_key, bs, embed_dims)`.
-            identity (torch.Tensor): The tensor used for addition, with the
-                same shape as `query`. Default None. If None,
-                `query` will be used.
-            query_pos (torch.Tensor): The positional encoding for `query`.
-                Default: None.
-            key_padding_mask (torch.Tensor): ByteTensor for `query`, with
-                shape [bs, num_key].
-            reference_points (torch.Tensor):  The normalized reference
-                points with shape (bs, num_query, num_levels, 2),
-                all elements is range in [0, 1], top-left (0,0),
-                bottom-right (1, 1), including padding area.
-                or (N, Length_{query}, num_levels, 4), add
-                additional two dimensions is (w, h) to
+            query (torch.Tensor): Query tensor of shape `(num_query, bs, embed_dims)`.
+            key (torch.Tensor, optional): Key tensor of shape `(num_key, bs, embed_dims)`. Default: None.
+            value (torch.Tensor, optional): Value tensor of shape `(num_key, bs, embed_dims)`. Default: None.
+            identity (torch.Tensor, optional): Tensor for residual connection, with the same shape as `query`.
+                If None, `query` is used. Default: None.
+            query_pos (torch.Tensor, optional): Positional encoding for the query. Default: None.
+            key_padding_mask (torch.Tensor, optional): Mask for the key tensor, of shape `(bs, num_key)`. Default: None.
+            reference_points (torch.Tensor, optional): Normalized reference points of shape `(bs, num_query, num_levels, 2)`
+                or `(bs, num_query, num_levels, 4)`. Default: None. If the shape is (bs, num_query, num_levels, 2),
+                then all elements are range in [0, 1], top-left (0,0), bottom-right (1, 1), including padding area.
+                If the shape is (N, Length_{query}, num_levels, 4), then add additional two dimensions is (w, h) to
                 form reference boxes.
-            spatial_shapes (torch.Tensor): Spatial shape of features in
-                different levels. With shape (num_levels, 2),
-                last dimension represents (h, w).
-            level_start_index (torch.Tensor): The start index of each level.
-                A tensor has shape ``(num_levels, )`` and can be represented
-                as [0, h_0*w_0, h_0*w_0+h_1*w_1, ...].
+            spatial_shapes (torch.Tensor, optional): Spatial shapes of feature maps at different levels, of shape
+                `(num_levels, 2)`. The last dimension represents (h, w). Default: None.
+            level_start_index (torch.Tensor, optional): Start index of each level in the flattened feature map,
+                of shape `(num_levels,)`. It can be represented as [0, h_0*w_0, h_0*w_0+h_1*w_1, ...]. Default: None.
 
         Returns:
-            torch.Tensor: forwarded results with shape
-            [num_query, bs, embed_dims].
+            torch.Tensor: Output tensor of shape `(num_query, bs, embed_dims)`.
+
+        Raises:
+            ValueError: If the last dimension of `reference_points` is not 2 or 4.
         """
 
         if value is None:
