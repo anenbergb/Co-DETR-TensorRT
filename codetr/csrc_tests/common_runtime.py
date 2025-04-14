@@ -1,7 +1,5 @@
-import contextlib
 import ctypes
 import os
-import sys
 
 import tensorrt as trt
 

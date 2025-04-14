@@ -1,20 +1,18 @@
-import os
 import argparse
-from typing import List, Tuple, Dict, Any
-import numpy as np
-
-import torch
-import torch_tensorrt
-from torch.utils import benchmark
-from torchvision.ops import batched_nms
+import os
+from typing import Any, Dict, List, Tuple
 
 import mmcv
-from mmengine.dataset import Compose
-from mmengine.config import Config
-from mmengine.structures import InstanceData
-
+import numpy as np
+import torch
+import torch_tensorrt
 from mmdet.structures import DetDataSample
 from mmdet.visualization import DetLocalVisualizer
+from mmengine.config import Config
+from mmengine.dataset import Compose
+from mmengine.structures import InstanceData
+from torch.utils import benchmark
+from torchvision.ops import batched_nms
 
 from codetr import build_CoDETR
 
@@ -282,7 +280,7 @@ def main():
             args=(batch_inputs, img_masks),
             strict=True,
         )
-        print(f"✅ Model exported to ExportedProgram")
+        print("✅ Model exported to ExportedProgram")
 
         # Then compile with TensorRT
         model_trt = torch_tensorrt.dynamo.compile(
@@ -306,7 +304,7 @@ def main():
         # Test inference
         output_trt = run_tensorrt_model()
 
-        print(f"Test inference successful! Output shapes:")
+        print("Test inference successful! Output shapes:")
         print(f"  boxes: {output_trt[0].shape}")
         print(f"  scores: {output_trt[1].shape}")
         print(f"  labels: {output_trt[2].shape}")
@@ -350,7 +348,7 @@ def save_model(save_path, model, inputs):
     output_format = "exported_program" if save_path.endswith(".ep") else "torchscript"
     print(f"Saving TensorRT model to {save_path}")
     torch_tensorrt.save(model, save_path, inputs=inputs, output_format=output_format)
-    print(f"✅ Model saved successfully")
+    print("✅ Model saved successfully")
 
 
 def print_tensorrt_model(model, save_path):

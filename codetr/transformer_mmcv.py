@@ -106,7 +106,8 @@ class PatchEmbed(BaseModule):
         conv_type (str): Type of convolution to generate patch embeddings. Default: "Conv2d".
         kernel_size (int): Kernel size of the embedding convolution. Default: 16.
         stride (int): Stride of the embedding convolution. Default: 16.
-        padding (int | tuple | str): Padding for the embedding convolution. Supports "same" and "corner". Default: "corner".
+        padding (int | tuple | str): Padding for the embedding convolution.
+            Supports "same" and "corner". Default: "corner".
         dilation (int): Dilation rate of the embedding convolution. Default: 1.
         bias (bool): Whether to use bias in the convolution. Default: True.
         norm_cfg (dict, optional): Configuration for the normalization layer. Default: None.
@@ -376,7 +377,8 @@ class MultiheadAttention(BaseModule):
 
         Args:
             query (Tensor): Query tensor of shape (num_queries, bs, embed_dims) or (bs, num_queries, embed_dims).
-            key (Tensor, optional): Key tensor of shape (num_keys, bs, embed_dims) or (bs, num_keys, embed_dims). Default: None.
+            key (Tensor, optional): Key tensor of shape (num_keys, bs, embed_dims) or (bs, num_keys, embed_dims).
+                Default: None.
             value (Tensor, optional): Value tensor of the same shape as `key`. Default: None.
             identity (Tensor, optional): Identity tensor for residual connection. Default: None.
             query_pos (Tensor, optional): Positional encoding for the query. Default: None.

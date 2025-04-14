@@ -11,7 +11,6 @@ from mmcv.transforms import LoadImageFromFile
 from mmdet.models.data_preprocessors import DetDataPreprocessor
 from mmdet.models.utils.misc import samplelist_boxtype2tensor
 from mmdet.structures import DetDataSample, SampleList
-from mmdet.structures.mask import encode_mask_results, mask2bbox
 from mmdet.utils import InstanceList
 from mmengine.config import Config
 from mmengine.dataset import Compose, pseudo_collate
@@ -322,30 +321,17 @@ class Inferencer:
         if is_save_pred and "img_path" in data_sample:
             img_path = osp.basename(data_sample.img_path)
             img_path = osp.splitext(img_path)[0]
-            out_img_path = osp.join(pred_out_dir, "preds", img_path + "_panoptic_seg.png")
             out_json_path = osp.join(pred_out_dir, "preds", img_path + ".json")
         elif is_save_pred:
-            out_img_path = osp.join(pred_out_dir, "preds", f"{self.num_predicted_imgs}_panoptic_seg.png")
             out_json_path = osp.join(pred_out_dir, "preds", f"{self.num_predicted_imgs}.json")
             self.num_predicted_imgs += 1
 
         result = {}
         if "pred_instances" in data_sample:
-            masks = data_sample.pred_instances.get("masks")
             pred_instances = data_sample.pred_instances.numpy()
             result = {"labels": pred_instances.labels.tolist(), "scores": pred_instances.scores.tolist()}
             if "bboxes" in pred_instances:
                 result["bboxes"] = pred_instances.bboxes.tolist()
-            if masks is not None:
-                if "bboxes" not in pred_instances or pred_instances.bboxes.sum() == 0:
-                    # Fake bbox, such as the SOLO.
-                    bboxes = mask2bbox(masks.cpu()).numpy().tolist()
-                    result["bboxes"] = bboxes
-                encode_masks = encode_mask_results(pred_instances.masks)
-                for encode_mask in encode_masks:
-                    if isinstance(encode_mask["counts"], bytes):
-                        encode_mask["counts"] = encode_mask["counts"].decode()
-                result["masks"] = encode_masks
 
         if is_save_pred:
             mmengine.dump(result, out_json_path)
@@ -400,7 +386,6 @@ class Inferencer:
         for boxes, scores, labels in zip(batch_boxes, batch_scores, batch_labels):
             if self.score_threshold > 0:
                 valid_mask = scores > self.score_threshold
-                # TODO: handle case where valid_mask is all False
                 scores = scores[valid_mask]
                 boxes = boxes[valid_mask]
                 labels = labels[valid_mask]
@@ -410,7 +395,6 @@ class Inferencer:
                 boxes = boxes[keep_idxs]
                 scores = scores[keep_idxs]
                 labels = labels[keep_idxs]
-            # TODO: handle case where det_bboxes is empty
 
             processed_predictions.append((boxes, scores, labels))
         return processed_predictions

@@ -190,21 +190,6 @@ def memcpy_device_to_host(host_arr: np.ndarray, device_ptr: int):
     cuda_call(cudart.cudaMemcpy(host_arr, device_ptr, nbytes, cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost))
 
 
-def _do_inference_base(inputs, outputs, stream, execute_async):
-    # Transfer input data to the GPU.
-    kind = cudart.cudaMemcpyKind.cudaMemcpyHostToDevice
-    [cuda_call(cudart.cudaMemcpyAsync(inp.device, inp.host, inp.nbytes, kind, stream)) for inp in inputs]
-    # Run inference.
-    execute_async()
-    # Transfer predictions back from the GPU.
-    kind = cudart.cudaMemcpyKind.cudaMemcpyDeviceToHost
-    [cuda_call(cudart.cudaMemcpyAsync(out.host, out.device, out.nbytes, kind, stream)) for out in outputs]
-    # Synchronize the stream
-    cuda_call(cudart.cudaStreamSynchronize(stream))
-    # Return only the host outputs.
-    return [out.host for out in outputs]
-
-
 def _do_inference_base(inputs, outputs, stream, execute_async_func):
     # Transfer input data to the GPU.
     kind = cudart.cudaMemcpyKind.cudaMemcpyHostToDevice

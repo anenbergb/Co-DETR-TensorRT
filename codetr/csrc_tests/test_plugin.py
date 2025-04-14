@@ -1,4 +1,3 @@
-import ctypes
 import os
 
 import numpy as np
@@ -68,7 +67,8 @@ def build_engine_from_plugin(
     # TensorRT runtime usually has to be initialized before `plugin_creator.create_plugin` is called.
     # Because the plugin creator may need to access the some functions, such as `getLogger`, from `NvInferRuntime.h`.
     # Otherwise, segmentation fault will occur because those functions are not accessible.
-    # However, if the plugin creator does not need to access the functions from `NvInferRuntime.h`, the runtime can be initialized later.
+    # However, if the plugin creator does not need to access the functions from `NvInferRuntime.h`,
+    # the runtime can be initialized later.
     runtime = trt.Runtime(TRT_LOGGER)
 
     load_plugin_lib(plugin_lib_file_path)
@@ -151,7 +151,8 @@ def test_plugin(dtype):
         host_device_buffer.host = data
 
     # Create an IExecutionContext and specify the device memory allocation strategy.
-    # .profiler https://docs.nvidia.com/deeplearning/tensorrt/latest/_static/python-api/infer/Core/Profiler.html#tensorrt.IProfiler
+    # .profiler
+    # https://docs.nvidia.com/deeplearning/tensorrt/latest/_static/python-api/infer/Core/Profiler.html#tensorrt.IProfiler
     context = engine.create_execution_context()
     do_inference(
         context=context,

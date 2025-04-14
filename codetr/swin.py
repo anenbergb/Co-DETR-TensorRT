@@ -133,7 +133,8 @@ class ShiftWindowMSA(BaseModule):
         qk_scale (float | None, optional): Override default qk scale of `head_dim ** -0.5` if set. Default: None.
         attn_drop_rate (float, optional): Dropout ratio of attention weights. Default: 0.0.
         proj_drop_rate (float, optional): Dropout ratio of output. Default: 0.0.
-        dropout_layer (dict, optional): Dropout configuration before output. Default: `dict(type='DropPath', drop_prob=0.0)`.
+        dropout_layer (dict, optional): Dropout configuration before output.
+            Default: `dict(type='DropPath', drop_prob=0.0)`.
         init_cfg (dict | None, optional): Initialization configuration. Default: None.
     """
 
@@ -642,7 +643,7 @@ class SwinTransformer(BaseModule):
         for i in range(1, self.frozen_stages + 1):
 
             if (i - 1) in self.out_indices:
-                norm_layer = getattr(self, f"norm{i-1}")
+                norm_layer = getattr(self, f"norm{i - 1}")
                 norm_layer.eval()
                 for param in norm_layer.parameters():
                     param.requires_grad = False

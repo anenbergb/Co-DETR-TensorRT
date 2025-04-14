@@ -135,11 +135,10 @@ class MultiScaleDeformableAttention(BaseModule):
                 If None, `query` is used. Default: None.
             query_pos (torch.Tensor, optional): Positional encoding for the query. Default: None.
             key_padding_mask (torch.Tensor, optional): Mask for the key tensor, of shape `(bs, num_key)`. Default: None.
-            reference_points (torch.Tensor, optional): Normalized reference points of shape `(bs, num_query, num_levels, 2)`
-                or `(bs, num_query, num_levels, 4)`. Default: None. If the shape is (bs, num_query, num_levels, 2),
-                then all elements are range in [0, 1], top-left (0,0), bottom-right (1, 1), including padding area.
-                If the shape is (N, Length_{query}, num_levels, 4), then add additional two dimensions is (w, h) to
-                form reference boxes.
+            reference_points (torch.Tensor, optional): Normalized reference points of shape
+                `(bs, num_query, num_levels, 2)` or `(bs, num_query, num_levels, 4)`. Default: None.
+                In the final dimension, the first two elements are the reference point centers in the range [0, 1].
+                The last two elements are the width and height of the reference boxes.
             spatial_shapes (torch.Tensor, optional): Spatial shapes of feature maps at different levels, of shape
                 `(num_levels, 2)`. The last dimension represents (h, w). Default: None.
             level_start_index (torch.Tensor, optional): Start index of each level in the flattened feature map,
