@@ -1,28 +1,24 @@
-from typing import List, Optional, Tuple, Union, Dict
-import numpy as np
-import torch
-from datetime import datetime
 import os.path as osp
 import warnings
-
-from torchvision.ops import batched_nms
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple, Union
 
 import mmcv
-from mmcv.transforms import LoadImageFromFile
-
 import mmengine
-from mmengine.config import Config
-from mmengine.dataset import pseudo_collate
-from mmengine.visualization import Visualizer
-from mmengine.registry import VISUALIZERS
-from mmengine.dataset import Compose
-from mmengine.structures import InstanceData
-
-from mmdet.models.utils.misc import samplelist_boxtype2tensor
+import numpy as np
+import torch
+from mmcv.transforms import LoadImageFromFile
 from mmdet.models.data_preprocessors import DetDataPreprocessor
+from mmdet.models.utils.misc import samplelist_boxtype2tensor
 from mmdet.structures import DetDataSample, SampleList
 from mmdet.structures.mask import encode_mask_results, mask2bbox
 from mmdet.utils import InstanceList
+from mmengine.config import Config
+from mmengine.dataset import Compose, pseudo_collate
+from mmengine.registry import VISUALIZERS
+from mmengine.structures import InstanceData
+from mmengine.visualization import Visualizer
+from torchvision.ops import batched_nms
 
 # SampleList is a list of DetDataSample
 # InstanceList is a list of InstanceData

@@ -1,10 +1,9 @@
 import math
 
 import torch
-from torch import Tensor
-
-from mmengine.model import BaseModule
 from mmdet.utils import OptMultiConfig
+from mmengine.model import BaseModule
+from torch import Tensor
 
 
 class SinePositionalEncoding(BaseModule):

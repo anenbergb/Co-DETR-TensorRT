@@ -4,13 +4,12 @@ from typing import List, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from mmcv.cnn import Linear
 from mmdet.models import DINOHead
 from mmdet.structures.bbox import bbox_cxcywh_to_xyxy
 
-from codetr.transformer import CoDinoTransformer
 from codetr.positional_encoding import SinePositionalEncoding
+from codetr.transformer import CoDinoTransformer
 
 
 class CoDINOHead(DINOHead):

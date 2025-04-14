@@ -1,15 +1,13 @@
-import torch
-import torch.nn.functional as F
+from typing import Dict, Optional, Tuple
+
 import numpy as np
 import tensorrt as trt
-from typing import Tuple, Dict, Union, Sequence
-
-
+import torch
+import torch.nn.functional as F
 import torch_tensorrt
-from torch_tensorrt.dynamo.conversion.converter_utils import (
-    get_trt_tensor,  # helper to map a torch.Tensor or Python scalar to a TRT ITensor
-)
+from torch import Tensor
 from torch.fx.node import Argument, Target
+from torch_tensorrt.dynamo.conversion.converter_utils import get_trt_tensor
 
 __all__ = ["multi_scale_deformable_attention_pytorch"]
 
@@ -18,13 +16,17 @@ __all__ = ["multi_scale_deformable_attention_pytorch"]
 # that describes the properties of the output Tensor given the properties
 # of the input Tensor. The FakeTensor kernel is necessary for the op to
 # work efficiently with `torch.compile`.
-
-
 @torch.library.register_fake("codetr::multi_scale_deformable_attention")
-def _(value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2col_step):
+def _multi_scale_deformable_attention_fake(
+    value: Tensor,
+    spatial_shapes: Tensor,
+    level_start_index: Tensor,
+    sampling_loc: Tensor,
+    attn_weight: Tensor,
+    im2col_step: int,
+) -> Tensor:
     """
     FakeTensor kernel for the `codetr::multi_scale_deformable_attention` operation.
-
     This kernel defines the expected output tensor properties based on the input
     tensor properties. It is used for meta-programming and optimization purposes
     with `torch.compile`.
@@ -85,7 +87,9 @@ def _(value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2co
     return torch.empty((bs, num_queries, embed_dims), dtype=value.dtype, device=value.device)
 
 
-def _backward(ctx, grad):
+def _multi_scale_deformable_attention_backward(
+    ctx: torch.autograd.Function, grad: Tensor
+) -> Tuple[Tensor, Optional[None], Optional[None], Tensor, Tensor, Optional[None]]:
     value, value_spatial_shapes, value_level_start_index, sampling_locations, attention_weights = ctx.saved_tensors
     grad_value = torch.zeros_like(value)
     grad_sampling_loc = torch.zeros_like(sampling_locations)
@@ -107,21 +111,27 @@ def _backward(ctx, grad):
     return grad_value, None, None, grad_sampling_loc, grad_attn_weight, None
 
 
-def _setup_context(ctx, inputs, output):
+def _multi_scale_deformable_attention_setup_context(
+    ctx: torch.autograd.Function, inputs: Tuple[Tensor, ...], output: Tensor
+) -> None:
     value, spatial_shapes, level_start_index, sampling_loc, attn_weight, im2col_step = inputs
     ctx.im2col_step = im2col_step
     ctx.save_for_backward(value, spatial_shapes, level_start_index, sampling_loc, attn_weight)
 
 
-torch.library.register_autograd("codetr::multi_scale_deformable_attention", _backward, setup_context=_setup_context)
+torch.library.register_autograd(
+    "codetr::multi_scale_deformable_attention",
+    _multi_scale_deformable_attention_backward,
+    setup_context=_multi_scale_deformable_attention_setup_context,
+)
 
 
 def multi_scale_deformable_attention_pytorch(
-    value: torch.Tensor,
-    value_spatial_shapes: torch.Tensor,
-    sampling_locations: torch.Tensor,
-    attention_weights: torch.Tensor,
-) -> torch.Tensor:
+    value: Tensor,
+    value_spatial_shapes: Tensor,
+    sampling_locations: Tensor,
+    attention_weights: Tensor,
+) -> Tensor:
     """CPU version of multi-scale deformable attention.
 
     Args:

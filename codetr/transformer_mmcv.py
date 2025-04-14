@@ -6,14 +6,12 @@ from typing import Sequence
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mmengine.config import ConfigDict
-from mmengine.model import BaseModule, ModuleList, Sequential
-from mmengine.utils import to_2tuple
-
 from mmcv.cnn import Linear, build_activation_layer, build_conv_layer, build_norm_layer
 from mmcv.cnn.bricks.drop import build_dropout
 from mmcv.cnn.bricks.scale import LayerScale
-
+from mmengine.config import ConfigDict
+from mmengine.model import BaseModule, ModuleList, Sequential
+from mmengine.utils import to_2tuple
 
 from codetr.multi_scale_deformable_attention import MultiScaleDeformableAttention
 

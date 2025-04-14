@@ -3,13 +3,12 @@ import math
 import torch
 import torch.nn as nn
 from mmcv.cnn import build_norm_layer
-
 from mmengine.model import BaseModule
 from mmengine.model.weight_init import xavier_init
 from torch.nn.init import normal_
 
-from codetr.transformer_mmcv import BaseTransformerLayer
 from codetr.multi_scale_deformable_attention import MultiScaleDeformableAttention
+from codetr.transformer_mmcv import BaseTransformerLayer
 
 
 class DetrTransformerEncoder(BaseModule):

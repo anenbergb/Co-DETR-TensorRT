@@ -20,7 +20,7 @@
 #
 
 import ctypes
-from typing import Optional, List
+from typing import List, Optional
 
 import numpy as np
 import tensorrt as trt

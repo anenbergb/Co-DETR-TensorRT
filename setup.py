@@ -29,7 +29,7 @@ setup(
             "jupyter",
             "jupyter_contrib_nbextensions",
         ],
-        "dev": ["black", "mypy", "flake8", "isort", "ipdb", "pytest"],
+        "dev": ["black", "mypy", "flake8", "isort", "ipdb", "pytest", "types-requests"],
     },
     ext_modules=[
         CUDAExtension(

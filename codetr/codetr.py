@@ -1,17 +1,15 @@
-from typing import Tuple, Optional
 import warnings
+from typing import Optional, Tuple
 
 import torch.nn as nn
-from torch import Tensor
-
-from mmdet.registry import MODELS
 from mmdet.evaluation import get_classes
-
+from mmdet.registry import MODELS
 from mmengine.config import Config
 from mmengine.runner.checkpoint import _load_checkpoint, _load_checkpoint_to_model
+from torch import Tensor
 
-from codetr.swin import SwinTransformer
 from codetr.co_dino_head import CoDINOHead
+from codetr.swin import SwinTransformer
 
 
 class CoDETR(nn.Module):
