@@ -12,10 +12,19 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-long-long -pedantic -Wno-deprecated-declarations")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-deprecated-declarations")
 
-# TensorRT
-if(NOT DEFINED TENSORRT_DIR)
-    message(FATAL_ERROR "TENSORRT_DIR not specified. Use -DTENSORRT_DIR=/path/to/TensorRT")
-endif()
+find_package(CUDAToolkit REQUIRED)
+message(STATUS "CUDA include dirs: ${CUDAToolkit_INCLUDE_DIRS}")
+message(STATUS "CUDA libraries:    ${CUDAToolkit_LIBRARY_DIR}")
+
+# Allow custom TensorRT paths, fallback to system defaults
+set(TENSORRT_LIB_DIR "/usr/lib/x86_64-linux-gnu" CACHE PATH "TensorRT lib directory")
+set(TENSORRT_INCLUDE_DIR "/usr/include/x86_64-linux-gnu" CACHE PATH "TensorRT include directory")
+
+message(STATUS "TensorRT headers: ${TENSORRT_INCLUDE_DIR}")
+message(STATUS "TensorRT libs:    ${TENSORRT_LIB_DIR}")
+
+find_library(TENSORRT_LIB nvinfer PATHS ${TENSORRT_LIB_DIR} REQUIRED)
+find_library(TENSORRT_PLUGIN_LIB nvinfer_plugin PATHS ${TENSORRT_LIB_DIR} REQUIRED)
 
 
 # Dependencies
@@ -31,17 +40,20 @@ target_link_options(deformable_attention_plugin PRIVATE "LINKER:--no-as-needed")
 # Include paths
 target_include_directories(deformable_attention_plugin PRIVATE
     ${TORCH_INCLUDE_DIRS}
-    ${TENSORRT_DIR}/include
+    ${TENSORRT_INCLUDE_DIR}
+    ${CUDAToolkit_INCLUDE_DIRS}
 )
 
-# Add TensorRT library path
-link_directories(${TENSORRT_DIR}/lib)
+target_link_directories(deformable_attention_plugin PRIVATE
+    ${TENSORRT_LIB_DIR}
+    ${CUDAToolkit_LIBRARY_DIR}
+)
 
 target_link_libraries(deformable_attention_plugin
     ${TORCH_LIBRARIES}
-    ${TENSORRT_DIR}/lib/libnvinfer.so
-    ${TENSORRT_DIR}/lib/libnvinfer_plugin.so
-    cudart
+    ${TENSORRT_LIB}
+    ${TENSORRT_PLUGIN_LIB}
+    CUDA::cudart
 )
 
 target_link_options(deformable_attention_plugin PRIVATE "LINKER:--as-needed")

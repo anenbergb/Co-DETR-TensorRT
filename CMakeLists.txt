@@ -20,19 +20,27 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(argparse)
 
 
-# TensorRT
-if(NOT DEFINED TENSORRT_DIR)
-    message(FATAL_ERROR "TENSORRT_DIR not specified. Use -DTENSORRT_DIR=/path/to/TensorRT")
-endif()
+find_package(CUDAToolkit REQUIRED)
+message(STATUS "CUDA include dirs: ${CUDAToolkit_INCLUDE_DIRS}")
+message(STATUS "CUDA libraries:    ${CUDAToolkit_LIBRARY_DIR}")
+
+# Allow custom TensorRT paths, fallback to system defaults
+set(TENSORRT_LIB_DIR "/usr/lib/x86_64-linux-gnu" CACHE PATH "TensorRT lib directory")
+set(TENSORRT_INCLUDE_DIR "/usr/include/x86_64-linux-gnu" CACHE PATH "TensorRT include directory")
+
+message(STATUS "TensorRT headers: ${TENSORRT_INCLUDE_DIR}")
+message(STATUS "TensorRT libs:    ${TENSORRT_LIB_DIR}")
+
+find_library(TENSORRT_LIB nvinfer PATHS ${TENSORRT_LIB_DIR} REQUIRED)
+find_library(TENSORRT_PLUGIN_LIB nvinfer_plugin PATHS ${TENSORRT_LIB_DIR} REQUIRED)
 
 
-# Torch-TensorRT config
-if(NOT DEFINED TORCH_TENSORRT_ROOT)
-    message(FATAL_ERROR "TORCH_TENSORRT_ROOT not specified. Use -DTORCH_TENSORRT_ROOT=/path/to/torch_tensorrt")
-endif()
+# Allow user to pass TORCH_TENSORRT_DIR, or use default
+set(TORCH_TENSORRT_DIR "/usr/local/lib/python3.12/dist-packages/torch_tensorrt" CACHE PATH "Path to Torch-TensorRT installation")
+message(STATUS "Using Torch-TensorRT from: ${TORCH_TENSORRT_DIR}")
 
-set(TORCH_TENSORRT_INCLUDE_DIRS "${TORCH_TENSORRT_ROOT}/include")
-set(TORCH_TENSORRT_LIBRARY_DIR "${TORCH_TENSORRT_ROOT}/lib")
+set(TORCH_TENSORRT_INCLUDE_DIRS "${TORCH_TENSORRT_DIR}/include")
+set(TORCH_TENSORRT_LIBRARY_DIR "${TORCH_TENSORRT_DIR}/lib")
 
 # Add the executable
 add_executable(codetr_inference codetr_inference.cpp)
@@ -44,7 +52,7 @@ target_include_directories(codetr_inference PRIVATE
     ${argparse_SOURCE_DIR}/include
     ${TORCHVISION_INCLUDE_DIRS}
     ${TORCH_TENSORRT_INCLUDE_DIRS}
-    ${TENSORRT_DIR}/include
+    ${TENSORRT_INCLUDE_DIR}
 )
 
 # Find Torch-TensorRT shared libraries
@@ -64,9 +72,9 @@ target_link_libraries(codetr_inference
     ${TORCHTRT_LIB}
     ${TORCHTRT_RUNTIME_LIB}
     ${TORCHTRT_PLUGINS_LIB}
-    ${TENSORRT_DIR}/lib/libnvinfer.so
-    ${TENSORRT_DIR}/lib/libnvinfer_plugin.so
-    cudart
+    ${TENSORRT_LIB}
+    ${TENSORRT_PLUGIN_LIB}
+    CUDA::cudart
 )
 
 # Revert linker flag after TRTEngine registration
