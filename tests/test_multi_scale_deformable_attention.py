@@ -336,7 +336,10 @@ def test_forward_equal_with_pytorch_half():
     im2col_step = 2
     output_pytorch = (
         multi_scale_deformable_attention_pytorch(
-            value.half(), shapes, sampling_locations.half(), attention_weights.half()
+            value.to(device).half(),
+            shapes.to(device),
+            sampling_locations.to(device).half(),
+            attention_weights.to(device).half(),
         )
         .detach()
         .cpu()

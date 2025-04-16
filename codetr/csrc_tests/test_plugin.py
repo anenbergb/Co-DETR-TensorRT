@@ -134,7 +134,7 @@ def test_plugin(dtype):
     np.random.seed(42)
 
     plugin_lib_file_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../csrc/build/libdeformable_attention_plugin.so")
+        os.path.join(os.path.dirname(__file__), "../libdeformable_attention_plugin.so")
     )
 
     deform_attn_inputs = DeformAttnInputs(dtype=dtype)

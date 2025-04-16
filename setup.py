@@ -1,5 +1,25 @@
+import os
 from setuptools import find_packages, setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+
+def get_cuda_gencode_flags(cuda_arch: str):
+    """
+    Given a CUDA_ARCH like "89" or "75", return appropriate -gencode flags.
+    Supports multi-arch input like "75;86;89"
+    """
+    arches = cuda_arch.replace(" ", "").split(";")
+    flags = []
+    for arch in arches:
+        sm = f"sm_{arch}"
+        compute = f"compute_{arch}"
+        flags.extend([
+            f"-gencode=arch={compute},code={sm}"
+        ])
+    return flags
+
+ # Default targets CUDA Compute Capability 8.9 (RTX 4090)
+cuda_arch = os.environ.get("CUDA_ARCH", "89")
+cuda_gencode_flags = get_cuda_gencode_flags(cuda_arch)
 
 setup(
     name="codetr",
@@ -10,6 +30,10 @@ setup(
     description="MMDetection Co-DETR exported to TensorRT",
     python_requires=">=3.10",
     packages=find_packages(),
+    include_package_data=True,
+    package_data={
+        "codetr": ["libdeformable_attention_plugin.so"],
+    },
     install_requires=["numpy", "pytest"],
     extras_require={
         "full": [
@@ -44,10 +68,7 @@ setup(
                 ],
                 "nvcc": [
                     "-O3",
-                    "--use_fast_math",
-                    # Explicitly targeting CUDA Compute Capability 8.9 (RTX 4090)
-                    "-gencode=arch=compute_89,code=sm_89",
-                ],
+                    "--use_fast_math"] + cuda_gencode_flags,
             },
             extra_link_args=["-Wl,--no-as-needed", "-lcuda", "-O3"],
             py_limited_api=True,
@@ -55,7 +76,6 @@ setup(
     ],
     cmdclass={"build_ext": BuildExtension.with_options(no_python_abi_suffix=True)},
     options={"bdist_wheel": {"py_limited_api": "cp39"}},
-    include_package_data=True,
 )
 
 # Debugging tips: add "-g" flag to include debugging information in the generated shared object file.
