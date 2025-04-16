@@ -55,7 +55,7 @@ setup(
     },
     ext_modules=[
         CUDAExtension(
-            name="codetr._C",
+            name="codetr.codetr_cpp_extension",
             sources=[
                 "codetr/csrc/deformable_attention_torch.cpp",
                 "codetr/csrc/ms_deform_attn.cu",

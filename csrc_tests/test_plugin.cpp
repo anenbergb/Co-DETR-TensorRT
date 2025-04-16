@@ -1,8 +1,18 @@
 #include <NvInfer.h>
 #include <NvInferPlugin.h>
 #include <iostream>
+#include <string>
 
-int main() {
+int main(int argc, char **argv) {
+  // Check if the plugin path is provided as a command-line argument
+  if (argc < 2) {
+    std::cerr << "Usage: " << argv[0] << " <path_to_libdeformable_attention_plugin.so>" << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  // Get the plugin path from the command-line argument
+  std::string pluginPath = argv[1];
+
   std::cout << "Initializing TensorRT plugins..." << std::endl;
   class Logger : public nvinfer1::ILogger {
     void log(Severity severity, const char *msg) noexcept override {
@@ -22,9 +32,9 @@ int main() {
     std::cerr << "Plugin registry is null!" << std::endl;
     return EXIT_FAILURE;
   }
-  // // Load the plugin library
-  std::cout << "Loading plugin library..." << std::endl;
-  std::string pluginPath = "../../libdeformable_attention_plugin.so";
+
+  // Load the plugin library
+  std::cout << "Loading plugin library from: " << pluginPath << std::endl;
   auto libHandle = registry->loadLibrary(pluginPath.c_str());
 
   int numCreators = 0;
@@ -40,6 +50,7 @@ int main() {
     std::cerr << "Plugin creator for " << pluginName << " not found!" << std::endl;
     return EXIT_FAILURE;
   }
+
   std::cout << "Successfully found plugin: " << pluginName << std::endl;
   return EXIT_SUCCESS;
 }

@@ -1,5 +1,3 @@
-import os
-
 import numpy as np
 import pytest
 import tensorrt as trt
@@ -125,18 +123,14 @@ def build_engine_from_plugin(
     # registry.deregister_creator(plugin_creator)
     return engine
 
-
 @pytest.mark.parametrize(
     "dtype",
     [np.float32, np.float16],
 )
-def test_plugin(dtype):
+def test_plugin(plugin_lib_file_path, dtype):
+    print(f"\nUsing plugin: {plugin_lib_file_path}")
+
     np.random.seed(42)
-
-    plugin_lib_file_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../libdeformable_attention_plugin.so")
-    )
-
     deform_attn_inputs = DeformAttnInputs(dtype=dtype)
     for dinput in deform_attn_inputs.iter_shapes():
         print(f"{dinput['name']}: {dinput['shape']} {dinput['dtype']}")
