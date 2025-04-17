@@ -86,12 +86,10 @@ RUN pip install ninja
 RUN pip install --no-build-isolation -e .
 
 
-
-
-
 # WORKDIR /workspace/codetr
 # RUN mkdir -p build && cd build && \
 #     cmake .. -Wno-dev \
+#     -DCMAKE_BUILD_TYPE=Release \
 #     -DCMAKE_PREFIX_PATH="$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')" \
 #     && make -j$(nproc)
 

@@ -83,7 +83,7 @@ def parse_args():
     parser.add_argument(
         "--plugin-lib",
         type=str,
-        default=os.path.join(PROJECT_ROOT, "codetr/csrc/build/libdeformable_attention_plugin.so"),
+        default=os.path.join(PROJECT_ROOT, "codetr/libdeformable_attention_plugin.so"),
         help="Path to the plugin library",
     )
     parser.add_argument(

@@ -57,11 +57,6 @@ target_include_directories(deformable_attention_plugin PRIVATE
     ${CUDAToolkit_INCLUDE_DIRS}
 )
 
-target_link_directories(deformable_attention_plugin PRIVATE
-    ${TENSORRT_LIB_DIR}
-    ${CUDAToolkit_LIBRARY_DIR}
-)
-
 target_link_libraries(deformable_attention_plugin
     ${TORCH_LIBRARIES}
     ${TENSORRT_LIB}
