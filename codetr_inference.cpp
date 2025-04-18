@@ -295,6 +295,23 @@ torch::Tensor convertToTRTDtype(const torch::Tensor &t, nvinfer1::DataType trt_d
   }
 }
 
+// Helper function to map DataType to string
+std::string dataTypeToString(nvinfer1::DataType type) {
+  switch (type) {
+  case nvinfer1::DataType::kFLOAT:
+      return "float32";
+  case nvinfer1::DataType::kHALF:
+      return "float16";
+  case nvinfer1::DataType::kINT32:
+      return "int32";
+  case nvinfer1::DataType::kINT64:
+      return "int64";
+  default:
+      return "unknown";
+  }
+};
+
+
 /**
  * Run inference on the given engine with batch_inputs, img_masks
  * that are shaped e.g. [1,3,H,W] and [1,H,W].
@@ -355,7 +372,7 @@ run_trt_inference(nvinfer1::ICudaEngine *engine,
   {
     size_t in0_bytes = tensorInfoNumBytes(infos[0]);
     cudaMemcpy(deviceBuffers[0], input0_host.data_ptr(), in0_bytes, cudaMemcpyHostToDevice);
-    size_t in1_bytes = tensorInfoNumBytes(infos[0]);
+    size_t in1_bytes = tensorInfoNumBytes(infos[1]);
     cudaMemcpy(deviceBuffers[1], input1_host.data_ptr(), in1_bytes, cudaMemcpyHostToDevice);
   }
 
@@ -520,6 +537,7 @@ int main(int argc, char *argv[]) {
     std::cerr << "Error: dtype must be either 'float16' or 'float32'" << std::endl;
     return EXIT_FAILURE;
   }
+  std::cout << "Using dtype: " << dtype_str << std::endl;
   // Convert dtype string to torch dtype
   torch::Dtype dtype = (dtype_str == "float16") ? torch::kFloat16 : torch::kFloat32;
 
@@ -572,7 +590,7 @@ int main(int argc, char *argv[]) {
   std::cout << "Preprocessed image tensors defined." << std::endl;
   torch::Tensor batch_inputs = batch_inputs_fp32.to(dtype);
   torch::Tensor img_masks = img_masks_fp32.to(dtype);
-  std::cout << "converted types" << std::endl;
+  std::cout << "converted types to " << dtype_str << std::endl;
   torch::Tensor boxes, scores, labels;
   if (is_tensorrt_engine) {
     nvinfer1::ICudaEngine *engine = load_trt_engine(model_path, logger);

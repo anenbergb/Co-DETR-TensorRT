@@ -23,41 +23,30 @@
 
 // Helper methods
 
-void caughtError(std::exception const &e) {
-  getLogger()->log(nvinfer1::ILogger::Severity::kINTERNAL_ERROR, e.what());
-}
+void caughtError(std::exception const &e) { getLogger()->log(nvinfer1::ILogger::Severity::kINTERNAL_ERROR, e.what()); }
 
-void logInfo(char const *msg) {
-  getLogger()->log(nvinfer1::ILogger::Severity::kINFO, msg);
-}
+void logInfo(char const *msg) { getLogger()->log(nvinfer1::ILogger::Severity::kINFO, msg); }
 
-void logVerbose(char const *msg) {
-  getLogger()->log(nvinfer1::ILogger::Severity::kVERBOSE, msg);
-}
+void logVerbose(char const *msg) { getLogger()->log(nvinfer1::ILogger::Severity::kVERBOSE, msg); }
 
 #define PLUGIN_ASSERT(val) reportAssertion((val), #val, __FILE__, __LINE__)
-void reportAssertion(bool success, char const *msg, char const *file,
-                     int32_t line) {
+void reportAssertion(bool success, char const *msg, char const *file, int32_t line) {
   if (!success) {
     std::ostringstream stream;
     stream << "Assertion failed: " << msg << std::endl
            << file << ':' << line << std::endl
            << "Aborting..." << std::endl;
-    getLogger()->log(nvinfer1::ILogger::Severity::kINTERNAL_ERROR,
-                     stream.str().c_str());
+    getLogger()->log(nvinfer1::ILogger::Severity::kINTERNAL_ERROR, stream.str().c_str());
     std::abort();
   }
 }
 
 #define PLUGIN_VALIDATE(val) reportValidation((val), #val, __FILE__, __LINE__)
-void reportValidation(bool success, char const *msg, char const *file,
-                      int32_t line) {
+void reportValidation(bool success, char const *msg, char const *file, int32_t line) {
   if (!success) {
     std::ostringstream stream;
-    stream << "Validation failed: " << msg << std::endl
-           << file << ':' << line << std::endl;
-    getLogger()->log(nvinfer1::ILogger::Severity::kINTERNAL_ERROR,
-                     stream.str().c_str());
+    stream << "Validation failed: " << msg << std::endl << file << ':' << line << std::endl;
+    getLogger()->log(nvinfer1::ILogger::Severity::kINTERNAL_ERROR, stream.str().c_str());
   }
 }
 
@@ -73,11 +62,10 @@ at::ScalarType getATenDtype(nvinfer1::DataType dtype) {
 }
 
 namespace codetr {
-extern void ms_deform_attn_forward_reference(
-    const at::Tensor &value, const at::Tensor &spatial_shapes,
-    const at::Tensor &level_start_index, const at::Tensor &sampling_loc,
-    const at::Tensor &attn_weight, at::Tensor &output,
-    const int64_t im2col_step);
+extern void ms_deform_attn_forward_reference(const at::Tensor &value, const at::Tensor &spatial_shapes,
+                                             const at::Tensor &level_start_index, const at::Tensor &sampling_loc,
+                                             const at::Tensor &attn_weight, at::Tensor &output,
+                                             const int64_t im2col_step);
 }
 
 // ---------------------------------------------------------------------------
@@ -86,8 +74,7 @@ extern void ms_deform_attn_forward_reference(
 
 // In IPluginV3 interface, the plugin name, version, and name space must be
 // specified for the plugin and plugin creator exactly the same.
-constexpr char const *const kDEFORM_ATTN_PLUGIN_NAME{
-    "DeformableAttentionPlugin"};
+constexpr char const *const kDEFORM_ATTN_PLUGIN_NAME{"DeformableAttentionPlugin"};
 constexpr char const *const kDEFORM_ATTN_PLUGIN_VERSION{"1"};
 constexpr char const *const kDEFORM_ATTN_PLUGIN_NAMESPACE{""};
 
@@ -104,9 +91,7 @@ class DeformableAttentionPlugin : public IPluginV3,
                                   public IPluginV3OneRuntime {
 public:
   // Construct from user param
-  explicit DeformableAttentionPlugin(
-      DeformableAttentionParameters const &params)
-      : mParams{params} {
+  explicit DeformableAttentionPlugin(DeformableAttentionParameters const &params) : mParams{params} {
     initFieldsToSerialize();
   }
 
@@ -114,8 +99,7 @@ public:
 
   // IPluginV3 Methods
 
-  IPluginCapability *
-  getCapabilityInterface(PluginCapabilityType type) noexcept override {
+  IPluginCapability *getCapabilityInterface(PluginCapabilityType type) noexcept override {
     try {
       // Build capability: Refers to plugin attributes and behaviors that the
       // plugin must exhibit for the TensorRT builder.
@@ -153,25 +137,18 @@ public:
 
   // IPluginV3OneCore Methods
 
-  char const *getPluginName() const noexcept override {
-    return kDEFORM_ATTN_PLUGIN_NAME;
-  }
+  char const *getPluginName() const noexcept override { return kDEFORM_ATTN_PLUGIN_NAME; }
 
-  char const *getPluginVersion() const noexcept override {
-    return kDEFORM_ATTN_PLUGIN_VERSION;
-  }
+  char const *getPluginVersion() const noexcept override { return kDEFORM_ATTN_PLUGIN_VERSION; }
 
-  char const *getPluginNamespace() const noexcept override {
-    return kDEFORM_ATTN_PLUGIN_NAMESPACE;
-  }
+  char const *getPluginNamespace() const noexcept override { return kDEFORM_ATTN_PLUGIN_NAMESPACE; }
 
   // IPluginV3OneBuild Methods
 
   // Number of plugin outputs
   int32_t getNbOutputs() const noexcept override { return 1; }
 
-  int32_t configurePlugin(DynamicPluginTensorDesc const *in, int32_t nbInputs,
-                          DynamicPluginTensorDesc const *out,
+  int32_t configurePlugin(DynamicPluginTensorDesc const *in, int32_t nbInputs, DynamicPluginTensorDesc const *out,
                           int32_t nbOutputs) noexcept override {
 
     // Communicates the number of inputs and outputs, dimensions, and datatypes
@@ -238,16 +215,12 @@ public:
     return 0;
   }
 
-  bool supportsFormatCombination(int32_t pos,
-                                 DynamicPluginTensorDesc const *inOut,
-                                 int32_t nbInputs,
+  bool supportsFormatCombination(int32_t pos, DynamicPluginTensorDesc const *inOut, int32_t nbInputs,
                                  int32_t nbOutputs) noexcept override {
     // For this method inputs are numbered 0..(nbInputs-1) and outputs are
     // numbered nbInputs..(nbInputs+nbOutputs-1). Using this numbering, pos is
     // an index into InOut, where 0 <= pos < nbInputs+nbOutputs.
-    PLUGIN_ASSERT(nbInputs == 5 && nbOutputs == 1 &&
-                  pos < nbInputs + nbOutputs);
-
+    PLUGIN_ASSERT(nbInputs == 5 && nbOutputs == 1 && pos < nbInputs + nbOutputs);
 
     // 0: value             float
     // 1: spatial_shapes    int64
@@ -267,13 +240,12 @@ public:
       isValidCombination &= (type == DataType::kFLOAT || type == DataType::kHALF);
       isValidCombination &= type == first_type;
     } else if (pos == 1 || pos == 2) {
-      isValidCombination &=  type == DataType::kINT64;
+      isValidCombination &= type == DataType::kINT64;
     }
     return isValidCombination;
   }
 
-  int32_t getOutputDataTypes(DataType *outputTypes, int32_t nbOutputs,
-                             DataType const *inputTypes,
+  int32_t getOutputDataTypes(DataType *outputTypes, int32_t nbOutputs, DataType const *inputTypes,
                              int32_t nbInputs) const noexcept override {
     PLUGIN_ASSERT(nbInputs == 5);
     PLUGIN_ASSERT(nbOutputs == 1);
@@ -282,9 +254,8 @@ public:
     return 0;
   }
 
-  int32_t getOutputShapes(DimsExprs const *inputs, int32_t nbInputs,
-                          DimsExprs const *shapeInputs, int32_t nbShapeInputs,
-                          DimsExprs *outputs, int32_t nbOutputs,
+  int32_t getOutputShapes(DimsExprs const *inputs, int32_t nbInputs, DimsExprs const *shapeInputs,
+                          int32_t nbShapeInputs, DimsExprs *outputs, int32_t nbOutputs,
                           IExprBuilder &exprBuilder) noexcept override {
     //   inputs[0] -> value (bs, num_keys, num_heads, dim_per_head)
     //   inputs[3] -> sampling_loc (bs, num_queries, num_heads, num_levels,
@@ -305,17 +276,14 @@ public:
     outputs[0].nbDims = 3;
     outputs[0].d[0] = bs;
     outputs[0].d[1] = num_queries;
-    outputs[0].d[2] = exprBuilder.operation(DimensionOperation::kPROD,
-                                            *num_heads, *dim_per_head);
+    outputs[0].d[2] = exprBuilder.operation(DimensionOperation::kPROD, *num_heads, *dim_per_head);
     return 0;
   }
 
   // IPluginV3OneRuntime Methods
 
-  int32_t enqueue(PluginTensorDesc const *inputDesc,
-                  PluginTensorDesc const *outputDesc, void const *const *inputs,
-                  void *const *outputs, void *workspace,
-                  cudaStream_t stream) noexcept override {
+  int32_t enqueue(PluginTensorDesc const *inputDesc, PluginTensorDesc const *outputDesc, void const *const *inputs,
+                  void *const *outputs, void *workspace, cudaStream_t stream) noexcept override {
     // void const* const* inputs: A pointer to a constant pointer to constant
     // untyped data
     //   - array of input pointers where each element is a pointer to some input
@@ -346,17 +314,43 @@ public:
     int num_levels = sampling_loc_dims.d[3];
     int num_points = sampling_loc_dims.d[4];
 
+    // Helper function to map DataType to string
+    auto dataTypeToString = [](nvinfer1::DataType type) -> std::string {
+      switch (type) {
+      case nvinfer1::DataType::kFLOAT:
+        return "float32";
+      case nvinfer1::DataType::kHALF:
+        return "float16";
+      case nvinfer1::DataType::kINT32:
+        return "int32";
+      case nvinfer1::DataType::kINT64:
+        return "int64";
+      default:
+        return "unknown";
+      }
+    };
     // Log tensor shapes for debugging
     std::stringstream ss;
     ss << "DeformableAttentionPlugin::enqueue: " << std::endl
-       << "  value shape: (" << bs << ", " << num_keys << ", " << num_heads
-       << ", " << dim_per_head << ")" << std::endl
-       << "  sampling_loc shape: (" << bs << ", " << num_queries << ", "
-       << num_heads << ", " << num_levels << ", " << num_points << ", 2)"
-       << std::endl
-       << "  attn_weight shape: (" << bs << ", " << num_queries << ", "
-       << num_heads << ", " << num_levels << ", " << num_points << ")"
-       << std::endl;
+       << "  value shape: (" << bs << ", " << num_keys << ", " << num_heads << ", " << dim_per_head << ")" << std::endl
+       << "  sampling_loc shape: (" << bs << ", " << num_queries << ", " << num_heads << ", " << num_levels << ", "
+       << num_points << ", 2)" << std::endl
+       << "  attn_weight shape: (" << bs << ", " << num_queries << ", " << num_heads << ", " << num_levels << ", "
+       << num_points << ")" << std::endl
+       << "  output shape: (" << bs << ", " << num_queries << ", " << num_heads * dim_per_head << ")" << std::endl
+       << "  nullptr checks: " << std::endl
+       << "  inputs[0]: " << (inputs[0] == nullptr ? "true" : "false")
+       << ", dtype: " << dataTypeToString(inputDesc[0].type) << std::endl
+       << "  inputs[1]: " << (inputs[1] == nullptr ? "true" : "false")
+       << " dtype: " << dataTypeToString(inputDesc[1].type) << std::endl
+       << "  inputs[2]: " << (inputs[2] == nullptr ? "true" : "false")
+       << " dtype: " << dataTypeToString(inputDesc[2].type) << std::endl
+       << "  inputs[3]: " << (inputs[3] == nullptr ? "true" : "false")
+       << " dtype: " << dataTypeToString(inputDesc[3].type) << std::endl
+       << "  inputs[4]: " << (inputs[4] == nullptr ? "true" : "false")
+       << " dtype: " << dataTypeToString(inputDesc[4].type) << std::endl
+       << "  outputs[0]: " << (outputs[0] == nullptr ? "true" : "false")
+       << " dtype: " << dataTypeToString(outputDesc[0].type) << std::endl;
     logVerbose(ss.str().c_str());
 
     DataType dtype = inputDesc[0].type;
@@ -372,39 +366,29 @@ public:
     auto options_long = at::TensorOptions().dtype(at::kLong).device(at::kCUDA);
 
     // Wrap the provided cudaStream_t in a c10::cuda::CUDAStream
-    c10::cuda::CUDAStream cuda_stream =
-        c10::cuda::getStreamFromExternal(stream, c10::cuda::current_device());
+    c10::cuda::CUDAStream cuda_stream = c10::cuda::getStreamFromExternal(stream, c10::cuda::current_device());
 
     // Use CUDAStreamGuard to set this stream as current
     c10::cuda::CUDAStreamGuard stream_guard(cuda_stream);
 
     // We're telling PyTorch to use externally-managed memory provied by
     // TensorRT
-    at::Tensor value =
-        at::from_blob(const_cast<void *>(inputs[0]),
-                      {bs, num_keys, num_heads, dim_per_head}, options);
+    at::Tensor value = at::from_blob(const_cast<void *>(inputs[0]), {bs, num_keys, num_heads, dim_per_head}, options);
     // reinterpret_cast<int64_t*>
-    at::Tensor spatial_shapes = at::from_blob(const_cast<void *>(inputs[1]),
-                                              {num_levels, 2}, options_long);
+    at::Tensor spatial_shapes = at::from_blob(const_cast<void *>(inputs[1]), {num_levels, 2}, options_long);
     // reinterpret_cast<int64_t*>
-    at::Tensor level_start_index = at::from_blob(const_cast<void *>(inputs[2]),
-                                                 {num_levels}, options_long);
-    at::Tensor sampling_loc = at::from_blob(
-        const_cast<void *>(inputs[3]),
-        {bs, num_queries, num_heads, num_levels, num_points, 2}, options);
+    at::Tensor level_start_index = at::from_blob(const_cast<void *>(inputs[2]), {num_levels}, options_long);
+    at::Tensor sampling_loc =
+        at::from_blob(const_cast<void *>(inputs[3]), {bs, num_queries, num_heads, num_levels, num_points, 2}, options);
 
-    at::Tensor attn_weight = at::from_blob(
-        const_cast<void *>(inputs[4]),
-        {bs, num_queries, num_heads, num_levels, num_points}, options);
+    at::Tensor attn_weight =
+        at::from_blob(const_cast<void *>(inputs[4]), {bs, num_queries, num_heads, num_levels, num_points}, options);
 
     // Wrap outputs[0] as the output tensor
     at::Tensor trt_output =
-        at::from_blob(const_cast<void *>(outputs[0]),
-                      {bs, num_queries, num_heads * dim_per_head}, options);
-
-    codetr::ms_deform_attn_forward_reference(
-        value, spatial_shapes, level_start_index, sampling_loc, attn_weight,
-        trt_output, mParams.im2col_step);
+        at::from_blob(const_cast<void *>(outputs[0]), {bs, num_queries, num_heads * dim_per_head}, options);
+    codetr::ms_deform_attn_forward_reference(value, spatial_shapes, level_start_index, sampling_loc, attn_weight,
+                                             trt_output, mParams.im2col_step);
 
     return 0;
   }
@@ -413,26 +397,18 @@ public:
   // communicate the input and output shapes for the subsequent enqueue(). The
   // output PluginTensorDesc will contain wildcards (-1) for any data-dependent
   // dimensions specified through getOutputShapes().
-  int32_t onShapeChange(PluginTensorDesc const *in, int32_t nbInputs,
-                        PluginTensorDesc const *out,
+  int32_t onShapeChange(PluginTensorDesc const *in, int32_t nbInputs, PluginTensorDesc const *out,
                         int32_t nbOutputs) noexcept override {
 
     return 0;
   }
 
-  IPluginV3 *
-  attachToContext(IPluginResourceContext *context) noexcept override {
-    return clone();
-  }
+  IPluginV3 *attachToContext(IPluginResourceContext *context) noexcept override { return clone(); }
 
-  PluginFieldCollection const *getFieldsToSerialize() noexcept override {
-    return &mFCToSerialize;
-  }
+  PluginFieldCollection const *getFieldsToSerialize() noexcept override { return &mFCToSerialize; }
 
-  size_t getWorkspaceSize(DynamicPluginTensorDesc const *inputs,
-                          int32_t nbInputs,
-                          DynamicPluginTensorDesc const *outputs,
-                          int32_t nbOutputs) const noexcept override {
+  size_t getWorkspaceSize(DynamicPluginTensorDesc const *inputs, int32_t nbInputs,
+                          DynamicPluginTensorDesc const *outputs, int32_t nbOutputs) const noexcept override {
     return 0;
   }
 
@@ -444,9 +420,8 @@ private:
   void initFieldsToSerialize() {
     // Serialize DeformableAttentionParameters
     mDataToSerialize.clear();
-    mDataToSerialize.emplace_back(
-        nvinfer1::PluginField("parameters", &mParams, PluginFieldType::kUNKNOWN,
-                              sizeof(DeformableAttentionParameters)));
+    mDataToSerialize.emplace_back(nvinfer1::PluginField("parameters", &mParams, PluginFieldType::kUNKNOWN,
+                                                        sizeof(DeformableAttentionParameters)));
     mFCToSerialize.nbFields = mDataToSerialize.size();
     mFCToSerialize.fields = mDataToSerialize.data();
   }
@@ -459,8 +434,7 @@ class DeformableAttentionPluginCreator : public IPluginCreatorV3One {
 public:
   DeformableAttentionPluginCreator() {
     mPluginAttributes.clear();
-    mPluginAttributes.emplace_back(nvinfer1::PluginField(
-        "im2col_step", nullptr, PluginFieldType::kINT64, 1));
+    mPluginAttributes.emplace_back(nvinfer1::PluginField("im2col_step", nullptr, PluginFieldType::kINT64, 1));
     mFC.nbFields = mPluginAttributes.size();
     mFC.fields = mPluginAttributes.data();
   }
@@ -472,22 +446,19 @@ public:
     return &mFC;
   }
 
-  IPluginV3 *createPlugin(char const *name, PluginFieldCollection const *fc,
-                          TensorRTPhase phase) noexcept override {
+  IPluginV3 *createPlugin(char const *name, PluginFieldCollection const *fc, TensorRTPhase phase) noexcept override {
     // The build phase and the deserialization phase are handled differently.
     if (phase == TensorRTPhase::kBUILD) {
       try {
         int64_t im2col_step = 64; // default
         for (int i = 0; i < fc->nbFields; ++i) {
           const auto &f = fc->fields[i];
-          if (strcmp(f.name, "im2col_step") == 0 &&
-              f.type == PluginFieldType::kINT64) {
+          if (strcmp(f.name, "im2col_step") == 0 && f.type == PluginFieldType::kINT64) {
             im2col_step = *static_cast<const int64_t *>(f.data);
           }
         }
         DeformableAttentionParameters const params{im2col_step};
-        DeformableAttentionPlugin *const plugin{
-            new DeformableAttentionPlugin{params}};
+        DeformableAttentionPlugin *const plugin{new DeformableAttentionPlugin{params}};
         return plugin;
       } catch (std::exception const &e) {
         caughtError(e);
@@ -504,14 +475,10 @@ public:
         char const *attrName = fields[0].name;
         PLUGIN_VALIDATE(!strcmp(attrName, "parameters"));
         PLUGIN_VALIDATE(fields[0].type == nvinfer1::PluginFieldType::kUNKNOWN);
-        PLUGIN_VALIDATE(fields[0].length ==
-                        sizeof(DeformableAttentionParameters));
-        DeformableAttentionParameters params{
-            *(static_cast<DeformableAttentionParameters const *>(
-                fields[0].data))};
+        PLUGIN_VALIDATE(fields[0].length == sizeof(DeformableAttentionParameters));
+        DeformableAttentionParameters params{*(static_cast<DeformableAttentionParameters const *>(fields[0].data))};
 
-        DeformableAttentionPlugin *const plugin{
-            new DeformableAttentionPlugin{params}};
+        DeformableAttentionPlugin *const plugin{new DeformableAttentionPlugin{params}};
         return plugin;
       } catch (std::exception const &e) {
         caughtError(e);
@@ -523,17 +490,11 @@ public:
     return nullptr;
   }
 
-  char const *getPluginNamespace() const noexcept override {
-    return kDEFORM_ATTN_PLUGIN_NAMESPACE;
-  }
+  char const *getPluginNamespace() const noexcept override { return kDEFORM_ATTN_PLUGIN_NAMESPACE; }
 
-  char const *getPluginName() const noexcept override {
-    return kDEFORM_ATTN_PLUGIN_NAME;
-  }
+  char const *getPluginName() const noexcept override { return kDEFORM_ATTN_PLUGIN_NAME; }
 
-  char const *getPluginVersion() const noexcept override {
-    return kDEFORM_ATTN_PLUGIN_VERSION;
-  }
+  char const *getPluginVersion() const noexcept override { return kDEFORM_ATTN_PLUGIN_VERSION; }
 
 private:
   nvinfer1::PluginFieldCollection mFC;
@@ -582,15 +543,11 @@ ThreadSafeLoggerFinder gLoggerFinder;
 //     return gLoggerFinder.getLogger();
 // }
 
-extern "C" void setLoggerFinder(nvinfer1::ILoggerFinder *finder) {
-  gLoggerFinder.setLoggerFinder(finder);
-}
+extern "C" void setLoggerFinder(nvinfer1::ILoggerFinder *finder) { gLoggerFinder.setLoggerFinder(finder); }
 
-extern "C" nvinfer1::IPluginCreatorInterface *const *
-getPluginCreators(int32_t &nbCreators) {
+extern "C" nvinfer1::IPluginCreatorInterface *const *getPluginCreators(int32_t &nbCreators) {
   nbCreators = 1;
   static nvinfer1::plugin::DeformableAttentionPluginCreator creator{};
-  static nvinfer1::IPluginCreatorInterface *const pluginCreatorList[] = {
-      &creator};
+  static nvinfer1::IPluginCreatorInterface *const pluginCreatorList[] = {&creator};
   return pluginCreatorList;
 }

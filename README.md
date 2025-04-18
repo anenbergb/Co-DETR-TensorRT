@@ -149,7 +149,7 @@ python export.py \
 --optimization-level 3 \
 --output /workspace/codetr_fp16 \
 --height 768 --width 1152 \
---weights co_dino_5scale_swin_large_16e_o365tococo-614254c9.pth \
+--weights /workspace/co_dino_5scale_swin_large_16e_o365tococo-614254c9.pth \
 --plugin-lib codetr/csrc/build/libdeformable_attention_plugin.so
 
 cd build
@@ -259,15 +259,19 @@ pip install --no-build-isolation -e .
 
 # [TEST] test torch -> tensorrt compilation
 LD_LIBRARY_PATH="${TensorRT_DIR}/lib":$LD_LIBRARY_PATH pytest tests/test_multi_scale_deformable_attention.py -s
-LD_LIBRARY_PATH="${TensorRT_DIR}/lib":$LD_LIBRARY_PATH pytest tests/test_export.py -s
+LD_LIBRARY_PATH="${TensorRT_DIR}/lib":$LD_LIBRARY_PATH pytest tests/test_export.py::test_query_head -s
 
 
 mkdir -p build && cd build
 CMAKE_TORCH_DIR="$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')"
 TORCHVISION_DIR="/home/bryan/src/libtorchvision"
 TORCHTRT_DIR="/home/bryan/anaconda3/envs/codetr1/lib/python3.12/site-packages/torch_tensorrt"
+TORCHTRT_DIR="/home/bryan/anaconda3/envs/mmcv/lib/python3.12/site-packages/torch_tensorrt"
+
 cmake .. -Wno-dev \
+-DCMAKE_BUILD_TYPE=Release \
 -DCMAKE_PREFIX_PATH="${CMAKE_TORCH_DIR};${TORCHVISION_DIR}" \
+-DTORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
 -DTENSORRT_LIB_DIR="${TensorRT_DIR}/lib" \
 -DTENSORRT_INCLUDE_DIR="${TensorRT_DIR}/include" \
 -DTORCHTRT_DIR=${TORCHTRT_DIR}
@@ -277,6 +281,7 @@ make -j$(nproc)
 cmake .. -Wno-dev \
 -DCMAKE_BUILD_TYPE=Release \
 -DCMAKE_PREFIX_PATH="/home/bryan/src/libtorch;${TORCHVISION_DIR}" \
+-DTORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
 -DTENSORRT_LIB_DIR="${TensorRT_DIR}/lib" \
 -DTENSORRT_INCLUDE_DIR="${TensorRT_DIR}/include" \
 -DTORCHTRT_DIR=/home/bryan/src/torch_tensorrt
@@ -304,19 +309,24 @@ python export.py \
 
 TORCH_DIR="$(python -c 'import torch; print(torch.__path__[0])')"
 LD_LIBRARY_PATH="${TORCH_DIR}/lib:${TORCHVISION_DIR}/lib:${TORCHTRT_DIR}/lib:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" \
+
+LD_LIBRARY_PATH="/home/bryan/src/libtorch/lib:${TORCHVISION_DIR}/lib:${TORCHTRT_DIR}/lib:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" \
 ./codetr_inference \
 --model /home/bryan/expr/co-detr/export/codetr1_fp16/codetr.ts \
 --input ../assets/demo.jpg \
 --output /home/bryan/expr/co-detr/export/codetr1_fp16/cpp_ts_output.jpg \
 --benchmark-iterations 100 \
---trt-plugin-path $DIR/codetr/csrc/build/libdeformable_attention_plugin.so
-
+--trt-plugin-path $DIR/codetr/csrc/build/libdeformable_attention_plugin.so \
+--trt-verbosity verbose \
+--dtype float16 --target-height 768 --target-width 1152
 
 
 
 LD_LIBRARY_PATH="/home/bryan/src/libtorch/lib:${TORCHVISION_DIR}/lib:/home/bryan/src/torch_tensorrt/lib:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" CUDA_LAUNCH_BLOCKING=1 \
 
 LD_LIBRARY_PATH="${TORCH_DIR}/lib:${TORCHVISION_DIR}/lib:${TORCHTRT_DIR}/lib:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" CUDA_LAUNCH_BLOCKING=1 \
+
+LD_LIBRARY_PATH="/home/bryan/src/libtorch/lib:${TORCHVISION_DIR}/lib:/home/bryan/src/torch_tensorrt/lib:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" \
 ./codetr_inference \
 --model /home/bryan/expr/co-detr/export/codetr1_fp16/codetr.engine \
 --input ../assets/demo.jpg \
