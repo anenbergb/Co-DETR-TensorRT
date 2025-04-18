@@ -299,18 +299,17 @@ torch::Tensor convertToTRTDtype(const torch::Tensor &t, nvinfer1::DataType trt_d
 std::string dataTypeToString(nvinfer1::DataType type) {
   switch (type) {
   case nvinfer1::DataType::kFLOAT:
-      return "float32";
+    return "float32";
   case nvinfer1::DataType::kHALF:
-      return "float16";
+    return "float16";
   case nvinfer1::DataType::kINT32:
-      return "int32";
+    return "int32";
   case nvinfer1::DataType::kINT64:
-      return "int64";
+    return "int64";
   default:
-      return "unknown";
+    return "unknown";
   }
 };
-
 
 /**
  * Run inference on the given engine with batch_inputs, img_masks
