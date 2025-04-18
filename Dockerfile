@@ -37,11 +37,31 @@ RUN git clone --branch v3.3.0 https://github.com/open-mmlab/mmdetection.git /opt
     pip install --no-cache-dir -r /opt/mmdetection/requirements/mminstall.txt && \
     pip install --no-cache-dir /opt/mmdetection
 
+# can be found with python -c 'import torch; print(torch.utils.cmake_prefix_path)'
+ARG CMAKE_PYTORCH_PATH=/opt/conda/lib/python3.11/site-packages/torch/share/cmake
+
+# Install TorchVision
+RUN git clone --branch release/0.21 --depth 1 https://github.com/pytorch/vision.git /tmp/vision && \
+    cd /tmp/vision && \
+    mkdir -p build && cd build && \
+    cmake .. -DCMAKE_PREFIX_PATH="${CMAKE_PYTORCH_PATH}" && \
+    cmake --build . --parallel $(nproc) && \
+    cmake --install . --prefix=/opt/torchvision && \
+    rm -rf /tmp/vision
+
+ARG WEIGHTS_FILE=co_dino_5scale_swin_large_16e_o365tococo-614254c9.pth
+ENV WEIGHTS_FILE_PATH=/workspace/${WEIGHTS_FILE}
+RUN wget --quiet --content-disposition -O $WEIGHTS_FILE_PATH https://download.openmmlab.com/mmdetection/v3.0/codetr/${WEIGHTS_FILE}
 # This ARG changes with each build to invalidate the following steps
 ARG CACHE_BUSTER=manual
 
-ENV PYTORCH_ROOT=/opt/conda/lib/python3.11/site-packages/torch
-ENV LD_LIBRARY_PATH=${PYTORCH_ROOT}/lib:$LD_LIBRARY_PATH
+ARG TORCHVISION_ROOT=/opt/torchvision
+# can be found with python -c 'import torch; print(torch.__path__[0])'
+ARG PYTORCH_ROOT=/opt/conda/lib/python3.11/site-packages/torch
+# can be found with python -c 'import torch_tensorrt; print(torch_tensorrt.__path__[0])'
+ARG TORCHTRT_ROOT=/opt/conda/lib/python3.11/site-packages/torch_tensorrt
+
+ENV LD_LIBRARY_PATH="${TORCHVISION_ROOT}/lib:${PYTORCH_ROOT}/lib:${TORCHTRT_ROOT}/lib:${LD_LIBRARY_PATH}"
 
 # Optional: Set build-time GPU architecture
 # for example, CUDA_ARCH="89;90"
@@ -62,7 +82,7 @@ RUN mkdir -p build && cd build && \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}" \
     -DTORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
-    -DCMAKE_PREFIX_PATH="$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')" \
+    -DCMAKE_PREFIX_PATH="${CMAKE_PYTORCH_PATH}" \
     -DTENSORRT_LIB_DIR="${TENSORRT_ROOT}/lib" \
     -DTENSORRT_INCLUDE_DIR="${TENSORRT_ROOT}/include" \
     && make -j$(nproc) \
@@ -85,12 +105,14 @@ RUN pip install ninja
 # Install package with -e flag to make testing easier
 RUN pip install --no-build-isolation -e .
 
-
-# WORKDIR /workspace/codetr
-# RUN mkdir -p build && cd build && \
-#     cmake .. -Wno-dev \
-#     -DCMAKE_BUILD_TYPE=Release \
-#     -DCMAKE_PREFIX_PATH="$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')" \
-#     && make -j$(nproc)
+# Build the codetr_inference executable
+RUN mkdir -p build && cd build && \
+    cmake .. -Wno-dev \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PREFIX_PATH="${CMAKE_PYTORCH_PATH};${TORCHVISION_ROOT}" \
+    -DTENSORRT_LIB_DIR="${TENSORRT_ROOT}/lib" \
+    -DTENSORRT_INCLUDE_DIR="${TENSORRT_ROOT}/include" \
+    -DTORCHTRT_DIR="${TORCHTRT_ROOT}" \
+    && make -j$(nproc)
 
 WORKDIR /workspace/codetr

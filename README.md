@@ -134,23 +134,40 @@ pytest tests/test_multi_scale_deformable_attention.py -s
 pytest tests/test_export.py -s
 pytest tests/test_export.py::test_query_head -s
 
-
 ```
 
-
-
-### Run tests
-
-
-
+### Download the 
 
 ### Export the Co-DETR model from Pytorch to TensorRT
+
+https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_swin_large_16e_o365tococo-614254c9.pth
+
+
 ```
 python export.py \
 --dtype float16 \
 --optimization-level 3 \
---output /home/bryan/expr/co-detr/export/codetr_fp16 \
---height 768 --width 1152
+--output /workspace/codetr_fp16 \
+--height 768 --width 1152 \
+--weights co_dino_5scale_swin_large_16e_o365tococo-614254c9.pth \
+--plugin-lib codetr/csrc/build/libdeformable_attention_plugin.so
+
+cd build
+./codetr_inference \
+--model /workspace/codetr_fp16/codetr.ts \
+--input ../assets/demo.jpg \
+--output /workspace/codetr_fp16/cpp_ts_output.jpg \
+--benchmark-iterations 100 \
+--trt-plugin-path ../codetr/csrc/build/libdeformable_attention_plugin.so
+
+CUDA_LAUNCH_BLOCKING=1 ./codetr_inference \
+--model /workspace/codetr_fp16/codetr.engine \
+--input ../assets/demo.jpg \
+--output /workspace/codetr_fp16/cpp_engine_output.jpg \
+--benchmark-iterations 100 \
+--trt-plugin-path ../codetr/csrc/build/libdeformable_attention_plugin.so \
+--trt-verbosity verbose \
+--dtype float16 --target-height 768 --target-width 1152
 ```
 
 Note
@@ -256,6 +273,16 @@ cmake .. -Wno-dev \
 -DTORCHTRT_DIR=${TORCHTRT_DIR}
 make -j$(nproc)
 
+
+cmake .. -Wno-dev \
+-DCMAKE_BUILD_TYPE=Release \
+-DCMAKE_PREFIX_PATH="/home/bryan/src/libtorch;${TORCHVISION_DIR}" \
+-DTENSORRT_LIB_DIR="${TensorRT_DIR}/lib" \
+-DTENSORRT_INCLUDE_DIR="${TensorRT_DIR}/include" \
+-DTORCHTRT_DIR=/home/bryan/src/torch_tensorrt
+make -j$(nproc)
+
+
 ```
 
 References for Pytorch C++ CUDA extensions
@@ -269,7 +296,7 @@ DIR=$(pwd)
 python export.py \
 --dtype float16 \
 --optimization-level 3 \
---output /home/bryan/expr/co-detr/export/codetr_fp16 \
+--output /home/bryan/expr/co-detr/export/codetr1_fp16 \
 --height 768 --width 1152 \
 --weights /home/bryan/expr/co-detr/co_dino_5scale_swin_large_16e_o365tococo-614254c9.pth \
 --plugin-lib $DIR/codetr/csrc/build/libdeformable_attention_plugin.so
@@ -285,13 +312,19 @@ LD_LIBRARY_PATH="${TORCH_DIR}/lib:${TORCHVISION_DIR}/lib:${TORCHTRT_DIR}/lib:${T
 --trt-plugin-path $DIR/codetr/csrc/build/libdeformable_attention_plugin.so
 
 
-LD_LIBRARY_PATH="${TORCH_DIR}/lib:${TORCHVISION_DIR}/lib:${TORCHTRT_DIR}/lib:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" \
+
+
+LD_LIBRARY_PATH="/home/bryan/src/libtorch/lib:${TORCHVISION_DIR}/lib:/home/bryan/src/torch_tensorrt/lib:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" CUDA_LAUNCH_BLOCKING=1 \
+
+LD_LIBRARY_PATH="${TORCH_DIR}/lib:${TORCHVISION_DIR}/lib:${TORCHTRT_DIR}/lib:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" CUDA_LAUNCH_BLOCKING=1 \
 ./codetr_inference \
 --model /home/bryan/expr/co-detr/export/codetr1_fp16/codetr.engine \
 --input ../assets/demo.jpg \
 --output /home/bryan/expr/co-detr/export/codetr1_fp16/cpp_engine_output.jpg \
---benchmark-iterations 100
---trt-plugin-path $DIR/codetr/csrc/build/libdeformable_attention_plugin.so
+--benchmark-iterations 100 \
+--trt-plugin-path $DIR/codetr/csrc/build/libdeformable_attention_plugin.so \
+--trt-verbosity verbose \
+--dtype float16 --target-height 768 --target-width 1152
 
 
 ```
