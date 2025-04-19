@@ -159,7 +159,7 @@ cd build
 --dtype float16 --target-height 768 --target-width 1152
 ```
 
-Run inference in C++ using the compile TensorRT serialized engine file
+Run inference in C++ using the compile TensorRT serialized engine file. Notice, there is NO dependency on the Torch-TensorRT C++ library when executing the TensorRT serialized engine file.
 ```
 ./codetr_inference \
 --model /workspace/output/codetr.engine \

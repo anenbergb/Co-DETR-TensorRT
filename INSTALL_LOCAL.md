@@ -117,6 +117,8 @@ wget https://github.com/pytorch/TensorRT/releases/download/v2.6.0/libtorchtrt-2.
 ```
 Install to a directory, e.g. `/home/bryan/src/torch_tensorrt`
 
+The Torch-TensorRT library is only required at C++ runtime when executing the compiled TorchScript model. It is not required when excuting the TensorRT serialized engine file.
+
 ### 6. Build and run C++ executable
 
 Build the codetr_inference executable
@@ -144,9 +146,9 @@ LD_LIBRARY_PATH="/home/bryan/src/libtorch/lib:/home/bryan/src/libtorchvision/lib
 --dtype float16 --target-height 768 --target-width 1152
 ```
 
-Run inference in C++ using the compile TensorRT serialized engine file
+Run inference in C++ using the compile TensorRT serialized engine file. Notice, there is NO dependency on the Torch-TensorRT C++ library when executing the TensorRT serialized engine file.
 ```
-LD_LIBRARY_PATH="/home/bryan/src/libtorch/lib:/home/bryan/src/libtorchvision/lib:/home/bryan/src/torch_tensorrt:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" \
+LD_LIBRARY_PATH="/home/bryan/src/libtorch/lib:/home/bryan/src/libtorchvision/lib:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" \
 ./codetr_inference \
 --model ../output_fp16/codetr.engine \
 --input ../assets/demo.jpg \

@@ -10,7 +10,7 @@
 #include <string>
 #include <torch/script.h>
 #include <torch/torch.h>
-#include <torch_tensorrt/torch_tensorrt.h>
+#include <torch_tensorrt/torch_tensorrt.h> // only required for TorchScript inference, not TensorRT engine
 #include <torchvision/ops/nms.h>
 #include <vector>
 
@@ -565,8 +565,6 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
-  torch_tensorrt::set_device(0);
-
   // Load image
   std::cout << "Loading image from: " << image_path << std::endl;
   // the image will be loaded in BGR format, which is OpenCV's default
@@ -599,6 +597,7 @@ int main(int argc, char *argv[]) {
     std::tie(boxes, scores, labels) = run_trt_inference(engine, batch_inputs, img_masks, benchmark_iterations);
 
   } else {
+    torch_tensorrt::get_build_info(); // forces the linker to include the torch_tensorrt library
     // Load model
     std::cout << "Loading model from: " << model_path << std::endl;
 

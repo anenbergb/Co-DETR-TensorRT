@@ -61,8 +61,6 @@ set(TORCHTRT_DIR "/usr/local/lib/python3.12/dist-packages/torch_tensorrt" CACHE 
 message(STATUS "Using Torch-TensorRT from: ${TORCHTRT_DIR}")
 
 find_library(TORCHTRT_LIB torchtrt PATHS ${TORCHTRT_DIR}/lib REQUIRED)
-find_library(TORCHTRT_RUNTIME_LIB torchtrt_runtime PATHS ${TORCHTRT_DIR}/lib REQUIRED)
-find_library(TORCHTRT_PLUGINS_LIB torchtrt_plugins PATHS ${TORCHTRT_DIR}/lib REQUIRED)
 
 # Add the executable
 add_executable(codetr_inference codetr_inference.cpp)
@@ -90,8 +88,6 @@ target_link_libraries(codetr_inference PRIVATE
     ${TENSORRT_LIB}
     ${TENSORRT_PLUGIN_LIB}
     ${TORCHTRT_LIB}
-    ${TORCHTRT_RUNTIME_LIB}
-    ${TORCHTRT_PLUGINS_LIB}
 )
 
 target_link_options(codetr_inference PRIVATE "LINKER:--as-needed")
