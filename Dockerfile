@@ -92,7 +92,7 @@ RUN mkdir -p build && cd build && \
 WORKDIR /workspace/codetr/csrc_tests
 RUN pip install cuda-python==12.6.2.post1
 RUN mkdir -p build && cd build && \
-    cmake .. -Wno-dev -Wno-deprecated-declarations \
+    cmake .. -Wno-dev \
     -DCMAKE_BUILD_TYPE=Release \
     -DTENSORRT_LIB_DIR="${TENSORRT_ROOT}/lib" \
     && make -j$(nproc) \
@@ -110,6 +110,7 @@ RUN mkdir -p build && cd build && \
     cmake .. -Wno-dev \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_PREFIX_PATH="${CMAKE_PYTORCH_PATH};${TORCHVISION_ROOT}" \
+    -DTORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
     -DTENSORRT_LIB_DIR="${TENSORRT_ROOT}/lib" \
     -DTENSORRT_INCLUDE_DIR="${TENSORRT_ROOT}/include" \
     -DTORCHTRT_DIR="${TORCHTRT_ROOT}" \

@@ -95,3 +95,4 @@ target_link_libraries(codetr_inference PRIVATE
 )
 
 target_link_options(codetr_inference PRIVATE "LINKER:--as-needed")
+target_compile_options(codetr_inference PRIVATE -Wno-deprecated-declarations)

@@ -22,3 +22,4 @@ target_link_libraries(test_plugin
     ${TENSORRT_PLUGIN_LIB}
     CUDA::cudart
 )
+target_compile_options(test_plugin PRIVATE -Wno-deprecated-declarations)

@@ -22,7 +22,7 @@ Alternatively, the Co-DETR TensorRT model can be serialized to a TensorRT engine
   * https://pytorch.org/TensorRT/contributors/dynamo_converters.html
 
 
-### Co-DETR inference runtime is sped up by over 4x (relative to Pytorch FP32) when executing the TensorRT FP16 compiled model
+### Co-DETR inference runtime is sped up over 4x (relative to Pytorch FP32) when executing the TensorRT FP16 compiled model
 
 All benchmarking is performed on an Nvidia RTX 4090 GPU.
 
@@ -77,7 +77,9 @@ Co-DETR (Collaborative-DETR) is an advanced object detector that builds upon the
 | **Performance (COCO mAP) test-dev**    | ~42.0 (Resnet50, 500 epochs)                        | ~50.0 (Resnet50, 50 epochs)                         | ~63.3 (Swin-L, 36 epochs)                 | ~64.1 (Swin-L, 16 e99.11ms
 
 
-# Docker container set-up
+# Installation (Docker Container)
+The easiest way to install the library and reproduce the results is to build the provided [Dockerfile](Dockerfile). If you would prefer to install locally, see [INSTALL_LOCAL.md](INSTALL_LOCAL.md).
+
 
 ### 1. Install Prerequisites
 * NVIDIA GPU drivers installed
@@ -88,85 +90,81 @@ sudo apt-get install -y nvidia-container-toolkit
 sudo systemctl restart docker
 ```
 
-/////
-Update setup.py
-"-gencode=arch=compute_89,code=sm_89",
-for your GPU compute capability (check whether this is necessary)
-
-### 2. Download NVIDIA TensorRT .tar.gz file
-```
-wget https://developer.nvidia.com/downloads/compute/machine-learning/tensorrt/10.7.0/tars/TensorRT-10.7.0.23.Linux.x86_64-gnu.cuda-12.6.tar.gz
-```
-
 ### 2. Build the Dockerfile
-Our Dockerfile is based on NVIDIA Nvidia NGC Container with Pytorch, TensorRT 10.7, and CUDA 12.6
-* https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch
-* https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-24-12.html
+The [Dockerfile](Dockerfile) is built from the [Pytorch docker base image pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel](https://hub.docker.com/r/pytorch/pytorch/tags)
 
-
-Release 24.12 contains
+The environment includes
 * Ubuntu 24.04 
 * CUDA 12.6.3
-* TensorRT 10.7.0.23
-* PyTorch 2.6.0a0+df5bbc0
-* Torch-TensorRT 2.6.0a0
+* PyTorch 2.6.0
 
-
-```
-sudo docker build -t codetr:latest -f Dockerfile .
-sudo docker build --build-arg CACHE_BUSTER=$(date +%s) -t codetr:latest -f Dockerfile . > build.log 2>&1
-
-sudo docker build --build-arg CACHE_BUSTER=$(date +%s) -t codetr2:latest -f Dockerfile2 . > build2.log 2>&1
-```
-
-Note: NGC nvcr.io/nvidia/pytorch:24.12-py3 didn't work because of a bug with the Torch-TensorRT that was fixed by the official 2.6.0 release.
-
-
-###  Run the container and tests
+The pytorch/pytorch docker base image was used rather than [NVIDIA NGC container 24.12](https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-24-12.html)
+because the NGC container relies on an early release version of Torch-TensorRT 2.6.0a0 that introduced a [bug](https://github.com/pytorch/TensorRT/issues/3226) that was later fixed with the latest 2.6.0 release. It was cleaner to install TensorRT and Torch-TensorRT in a new pytorch/pytorch base image, rather than updating the librariers in the nvcr.io/nvidia/pytorch:24.12-py3 NGC container.   
 
 ```
-sudo docker run --gpus device=0 --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -it --rm codetr:latest
-# test the plugin
+sudo docker build \
+--build-arg CACHE_BUSTER=$(date +%s) \
+--build-arg CUDA_ARCH="89" \
+--build-arg TORCH_CUDA_ARCH_LIST="8.9" \
+-t codetr:latest -f Dockerfile .
+```
+
+`CUDA_ARCH="89" TORCH_CUDA_ARCH_LIST="8.9"` correspond to the NVIDIA RTX 4090 GPU Compute Compatibility. Refer to this webpage https://developer.nvidia.com/cuda-gpus to update the numbers to match your GPU. You can also target multiple CUDA compute capabilities such as `CUDA_ARCH="76;89" TORCH_CUDA_ARCH_LIST="7.6;8.9"`
+
+
+### 3. Run the container and run tests
+
+```
+sudo docker run \
+--gpus device=0 --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
+-v /home/bryan/expr/co-detr/docker:/workspace/output \
+-it --rm codetr:latest
+```
+You should specify the target GPU device `--gpus device=0` and you can update `/home/bryan/expr/co-detr/docker` to a directory on your local filesystem.
+
+#### Run the test suite
+```
 pytest csrc_tests/test_plugin.py -s --plugin-lib codetr/csrc/build/libdeformable_attention_plugin.so
-# test 
 pytest tests/test_multi_scale_deformable_attention.py -s
-
 pytest tests/test_export.py -s
-pytest tests/test_export.py::test_query_head -s
-
 ```
 
-### Download the 
+### 4. Export the Co-DETR model from Pytorch to TensorRT and run inference in C++
 
-### Export the Co-DETR model from Pytorch to TensorRT
-
-https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_swin_large_16e_o365tococo-614254c9.pth
-
+The [co_dino_5scale_swin_large_16e_o365tococo-614254c9.pth](https://download.openmmlab.com/mmdetection/v3.0/codetr/co_dino_5scale_swin_large_16e_o365tococo-614254c9.pth) weights are automatically downloaded with the Dockerfile build and saved to `/workspace`.
 
 ```
 python export.py \
 --dtype float16 \
 --optimization-level 3 \
---output /workspace/codetr_fp16 \
+--output /workspace/output \
 --height 768 --width 1152 \
 --weights /workspace/co_dino_5scale_swin_large_16e_o365tococo-614254c9.pth \
 --plugin-lib codetr/csrc/build/libdeformable_attention_plugin.so
+```
+see [export.py](export.py) for optional arguments
 
+
+Run inference C++ using the compiled TorchScript model 
+```
 cd build
 ./codetr_inference \
---model /workspace/codetr_fp16/codetr.ts \
+--model /workspace/output/codetr.ts \
 --input ../assets/demo.jpg \
---output /workspace/codetr_fp16/cpp_ts_output.jpg \
---benchmark-iterations 100 \
---trt-plugin-path ../codetr/csrc/build/libdeformable_attention_plugin.so
-
-CUDA_LAUNCH_BLOCKING=1 ./codetr_inference \
---model /workspace/codetr_fp16/codetr.engine \
---input ../assets/demo.jpg \
---output /workspace/codetr_fp16/cpp_engine_output.jpg \
+--output /workspace/output/cpp_ts_output.jpg \
 --benchmark-iterations 100 \
 --trt-plugin-path ../codetr/csrc/build/libdeformable_attention_plugin.so \
---trt-verbosity verbose \
+--dtype float16 --target-height 768 --target-width 1152
+```
+
+Run inference in C++ using the compile TensorRT serialized engine file
+```
+./codetr_inference \
+--model /workspace/output/codetr.engine \
+--input ../assets/demo.jpg \
+--output /workspace/output/cpp_engine_output.jpg \
+--benchmark-iterations 100 \
+--trt-plugin-path ../codetr/csrc/build/libdeformable_attention_plugin.so \
 --dtype float16 --target-height 768 --target-width 1152
 ```
 
@@ -175,244 +173,7 @@ Note
 * The Swin Transformer backbone downscales the input image by a factor of 32x.
 
 
-# Local Installation
-To install the library locally, you'll need a similar environment to the Dockerfile.
 
-The library was tested with
-* CUDA 12.6.3
-* TensorRT 10.7.0.23
-* PyTorch 2.6.0a0+df5bbc0
-* Torch-TensorRT 2.6.0a0
-
-### Install CUDA version 12.6
-https://developer.nvidia.com/cuda-12-6-0-download-archive
-### Download TensorRT version 10.7.0.23
-https://developer.nvidia.com/nvidia-tensorrt-download
-
-The version of TensorRT used to build and run the C++ Co-DETR inference executable must be the same version as that used to compile the Co-DETR model engine in python.
-### Download LibTorch 2.6.0 for CUDA 12.6
-https://pytorch.org/get-started/locally/
-```
-wget https://download.pytorch.org/libtorch/cu126/libtorch-cxx11-abi-shared-with-deps-2.6.0%2Bcu126.zip
-# unzip and install to /home/bryan/src/libtorch
-```
-### Download TorchVision
-Torchvision C++ is required for the NMS operator
-
-Clone [torchvision github](https://github.com/pytorch/vision/tree/main) and follow the [C++ installation instructions](https://github.com/pytorch/vision/tree/main/examples/cpp) to build locally 
-```
-mkdir -p build && cd build
-cmake .. -DCMAKE_PREFIX_PATH=/home/bryan/src/libtorch/share/cmake/Torch
-cmake --build . --parallel 8
-cmake --install . -DCMAKE_INSTALL_PREFIX=/home/bryan/src/libtorchvision
-```
-
-### Follow Dockerfile build example
-
-Set the CUDA_ARCH to your GPU Compute Compatibilty. https://developer.nvidia.com/cuda-gpus
-
-```
-conda create -n codetr python=3.12 -y
-conda activate codetr
-
-pip install --upgrade pip setuptools wheel
-pip install torch torchvision torch-tensorrt tensorrt --extra-index-url https://download.pytorch.org/whl/cu126
-git clone --branch v3.3.0 https://github.com/open-mmlab/mmdetection.git /home/bryan/Downloads/mmdetection && \
-pip install --no-cache-dir -r /home/bryan/Downloads/mmdetection/requirements/mminstall.txt && \
-pip install --no-cache-dir /home/bryan/Downloads/mmdetection
-
-CUDA_ARCH="89"
-TORCH_CUDA_ARCH_LIST="8.9"
-TensorRT_DIR="/home/bryan/src/TensorRT-10.7.0.23"
-DIR=$(pwd)
-
-cd $DIR/codetr/csrc
-mkdir -p build && cd build
-cmake .. -Wno-dev \
--DCMAKE_BUILD_TYPE=Release \
--DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}" \
--DTORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
--DCMAKE_PREFIX_PATH="$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')" \
--DTENSORRT_LIB_DIR="${TensorRT_DIR}/lib" \
--DTENSORRT_INCLUDE_DIR="${TensorRT_DIR}/include"
-make -j$(nproc)
-cp libdeformable_attention_plugin.so ../../
-
-# [TEST] Load the plugin in C++
-cd $DIR/csrc_tests
-mkdir -p build && cd build
-cmake .. -Wno-dev \
--DCMAKE_BUILD_TYPE=Release \
--DTENSORRT_LIB_DIR="${TensorRT_DIR}/lib"
-make -j$(nproc)
-LD_LIBRARY_PATH="${TensorRT_DIR}/lib":$LD_LIBRARY_PATH ./test_plugin $DIR/codetr/csrc/build/libdeformable_attention_plugin.so
-
-# [TEST] Run the plugin in python
-cd $DIR/csrc_tests
-pip install cuda-python pytest
-LD_LIBRARY_PATH="${TensorRT_DIR}/lib":$LD_LIBRARY_PATH pytest test_plugin.py -s --plugin-lib $DIR/codetr/csrc/build/libdeformable_attention_plugin.so
-
-cd $DIR
-pip install ninja
-export CUDA_ARCH=$CUDA_ARCH
-pip install --no-build-isolation -e .
-
-# [TEST] test torch -> tensorrt compilation
-LD_LIBRARY_PATH="${TensorRT_DIR}/lib":$LD_LIBRARY_PATH pytest tests/test_multi_scale_deformable_attention.py -s
-LD_LIBRARY_PATH="${TensorRT_DIR}/lib":$LD_LIBRARY_PATH pytest tests/test_export.py::test_query_head -s
-
-
-mkdir -p build && cd build
-CMAKE_TORCH_DIR="$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')"
-TORCHVISION_DIR="/home/bryan/src/libtorchvision"
-TORCHTRT_DIR="/home/bryan/anaconda3/envs/codetr1/lib/python3.12/site-packages/torch_tensorrt"
-TORCHTRT_DIR="/home/bryan/anaconda3/envs/mmcv/lib/python3.12/site-packages/torch_tensorrt"
-
-cmake .. -Wno-dev \
--DCMAKE_BUILD_TYPE=Release \
--DCMAKE_PREFIX_PATH="${CMAKE_TORCH_DIR};${TORCHVISION_DIR}" \
--DTORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
--DTENSORRT_LIB_DIR="${TensorRT_DIR}/lib" \
--DTENSORRT_INCLUDE_DIR="${TensorRT_DIR}/include" \
--DTORCHTRT_DIR=${TORCHTRT_DIR}
-make -j$(nproc)
-
-
-cmake .. -Wno-dev \
--DCMAKE_BUILD_TYPE=Release \
--DCMAKE_PREFIX_PATH="/home/bryan/src/libtorch;${TORCHVISION_DIR}" \
--DTORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
--DTENSORRT_LIB_DIR="${TensorRT_DIR}/lib" \
--DTENSORRT_INCLUDE_DIR="${TensorRT_DIR}/include" \
--DTORCHTRT_DIR=/home/bryan/src/torch_tensorrt
-make -j$(nproc)
-
-
-```
-
-References for Pytorch C++ CUDA extensions
-- https://pytorch.org/tutorials/advanced/cpp_custom_ops.html#cpp-custom-ops-tutorial
-- https://github.com/pytorch/vision/tree/main/torchvision/csrc
-
-### Compiling the TensorRT engine and running inference
-
-```
-DIR=$(pwd)
-python export.py \
---dtype float16 \
---optimization-level 3 \
---output /home/bryan/expr/co-detr/export/codetr1_fp16 \
---height 768 --width 1152 \
---weights /home/bryan/expr/co-detr/co_dino_5scale_swin_large_16e_o365tococo-614254c9.pth \
---plugin-lib $DIR/codetr/csrc/build/libdeformable_attention_plugin.so
-
-
-TORCH_DIR="$(python -c 'import torch; print(torch.__path__[0])')"
-LD_LIBRARY_PATH="${TORCH_DIR}/lib:${TORCHVISION_DIR}/lib:${TORCHTRT_DIR}/lib:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" \
-
-LD_LIBRARY_PATH="/home/bryan/src/libtorch/lib:${TORCHVISION_DIR}/lib:${TORCHTRT_DIR}/lib:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" \
-./codetr_inference \
---model /home/bryan/expr/co-detr/export/codetr1_fp16/codetr.ts \
---input ../assets/demo.jpg \
---output /home/bryan/expr/co-detr/export/codetr1_fp16/cpp_ts_output.jpg \
---benchmark-iterations 100 \
---trt-plugin-path $DIR/codetr/csrc/build/libdeformable_attention_plugin.so \
---trt-verbosity verbose \
---dtype float16 --target-height 768 --target-width 1152
-
-
-
-LD_LIBRARY_PATH="/home/bryan/src/libtorch/lib:${TORCHVISION_DIR}/lib:/home/bryan/src/torch_tensorrt/lib:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" CUDA_LAUNCH_BLOCKING=1 \
-
-LD_LIBRARY_PATH="${TORCH_DIR}/lib:${TORCHVISION_DIR}/lib:${TORCHTRT_DIR}/lib:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" CUDA_LAUNCH_BLOCKING=1 \
-
-LD_LIBRARY_PATH="/home/bryan/src/libtorch/lib:${TORCHVISION_DIR}/lib:/home/bryan/src/torch_tensorrt/lib:${TensorRT_DIR}/lib:$LD_LIBRARY_PATH" \
-./codetr_inference \
---model /home/bryan/expr/co-detr/export/codetr1_fp16/codetr.engine \
---input ../assets/demo.jpg \
---output /home/bryan/expr/co-detr/export/codetr1_fp16/cpp_engine_output.jpg \
---benchmark-iterations 100 \
---trt-plugin-path $DIR/codetr/csrc/build/libdeformable_attention_plugin.so \
---trt-verbosity verbose \
---dtype float16 --target-height 768 --target-width 1152
-
-
-```
-
-LD_LIBRARY_PATH=/home/bryan/src/libtorch/lib:/home/bryan/src/libtorchvision/lib:/home/bryan/src/torch_tensorrt/lib:/home/bryan/src/TensorRT-10.7.0.23/lib:$LD_LIBRARY_PATH 
-
-
-
-
-## Building the codetr_inference C++ executable
-```
-mkdir build
-cd build
-cmake .. -Wno-dev \
--DCMAKE_PREFIX_PATH="/home/bryan/src/libtorch;/home/bryan/src/libtorchvision" \
--DTORCH_TENSORRT_DIR=/home/bryan/src/torch_tensorrt \
--DTENSORRT_DIR=/home/bryan/src/TensorRT-10.7.0.23
-make -j8
-
-LD_LIBRARY_PATH=/home/bryan/src/libtorch/lib:/home/bryan/src/libtorchvision/lib:/home/bryan/src/torch_tensorrt/lib:/home/bryan/src/TensorRT-10.7.0.23/lib:$LD_LIBRARY_PATH ./codetr_inference \
---model /home/bryan/expr/co-detr/export/codetr_fp16/codetr.ts \
---input ../assets/demo.jpg \
---output /home/bryan/expr/co-detr/export/codetr_fp16/cpp_ts_output.jpg \
---benchmark-iterations 100
-
-
-LD_LIBRARY_PATH=/home/bryan/src/libtorch/lib:/home/bryan/src/libtorchvision/lib:/home/bryan/src/torch_tensorrt/lib:/home/bryan/src/TensorRT-10.7.0.23/lib:$LD_LIBRARY_PATH ./codetr_inference \
---model /home/bryan/expr/co-detr/export/codetr_fp16/codetr.engine \
---input ../assets/demo.jpg \
---output /home/bryan/expr/co-detr/export/codetr_fp16/cpp_engine_output.jpg \
---benchmark-iterations 100
-
-```
-
-Then to show that TensorRT is linked correctly
-```
-> ldd codetr_inference | grep nvinfer
-        libnvinfer.so.10 => /home/bryan/src/TensorRT-10.7.0.23/lib/libnvinfer.so.10 (0x00007ca307600000)
-        libnvinfer_plugin.so.10 => /home/bryan/src/TensorRT-10.7.0.23/lib/libnvinfer_plugin.so.10 (0x00007ca305200000)
-```
-
-
-
-### ABI  Mismatch
-
-Make sure the TorchVision and Torch-TensorRT libraries you're linking to are built with the same Torch version and ABI.
-If Torch-TensorRT or TorchVision was built from source:
-* Verify they're using the same PyTorch headers/libraries you’re linking against.
-* Check their ABI settings (they must match your -D_GLIBCXX_USE_CXX11_ABI=1).
-
-
-nm -C /home/bryan/src/libtorch/lib/libtorch.so | grep 'std::__cxx11'  -> no results
-nm -C /home/bryan/src/libtorchvision/lib/libtorchvision.so | grep 'std::__cxx11' -> lots of results
-nm -C /home/bryan/src/torch_tensorrt/lib/libtorchtrt.so | grep 'std::__cxx11' -> lots of results
-
-If you see lots of std::__cxx11::string, it's using the new ABI.
-
-torch 2.6
-
-nm -C /home/bryan/anaconda3/envs/mmcv/lib/python3.12/site-packages/torch_tensorrt/lib/libtorchtrt.so | grep 'std::string' | grep '__cxx11'
-
-
-// Ensure that TensorRT versions are the same. The version used in Python, and the version installed on device
-python:
-
-tensorrt.__version__
-'10.7.0.post1
-
->>> import tensorrt
->>> tensorrt.__version__
-'10.9.0.34'
-
-
-> nm -D /usr/lib/x86_64-linux-gnu/libnvinfer.so | grep tensorrt
-00000000224b0524 B tensorrt_build_root_20250301_9406843d50261530
-00000000224b0528 B tensorrt_version_10_9_0_34
-
-cat /usr/include/x86_64-linux-gnu/NvInferVersion.h
 
 
 
@@ -670,3 +431,9 @@ black codetr
 ```
 clang-format -i <path-to-C++-file>
 ```
+
+# Resources and References
+
+References for Pytorch C++ CUDA extensions
+- https://pytorch.org/tutorials/advanced/cpp_custom_ops.html#cpp-custom-ops-tutorial
+- https://github.com/pytorch/vision/tree/main/torchvision/csrc
