@@ -1,3 +1,5 @@
+# Modified from MMDetection (https://github.com/open-mmlab/mmdetection)
+# Original license: Apache License 2.0
 import copy
 import math
 import warnings

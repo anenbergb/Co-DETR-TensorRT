@@ -1,3 +1,5 @@
+# Modified from MMDetection (https://github.com/open-mmlab/mmdetection)
+# Original license: Apache License 2.0
 import warnings
 from collections import OrderedDict
 from copy import deepcopy

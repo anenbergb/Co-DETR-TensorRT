@@ -340,4 +340,7 @@ black codetr
 clang-format -i <path-to-C++-file>
 ```
 
+# Acknowledgments
 
+This project includes code adapted from [MMDetection](https://github.com/open-mmlab/mmdetection),
+licensed under the Apache License 2.0.

@@ -1,3 +1,4 @@
+# Adapted from https://github.com/leimao/TensorRT-Custom-Plugin-Example
 # Slightly modified from
 # https://github.com/NVIDIA/TensorRT/blob/c0c633cc629cc0705f0f69359f531a192e524c0f/samples/python/common.py
 # https://github.com/NVIDIA/TensorRT/blob/ccf119972b50299ba00d35d39f3938296e187f4e/samples/python/common_runtime.py

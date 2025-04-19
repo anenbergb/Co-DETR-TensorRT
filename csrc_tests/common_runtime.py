@@ -1,3 +1,4 @@
+# Adapted from https://github.com/leimao/TensorRT-Custom-Plugin-Example
 import ctypes
 import os
 
