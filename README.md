@@ -5,24 +5,26 @@ Compiliation from Pytorch to TensorRT is accomplished in two steps
 ### 1. Ahead-of-Time (AOT) graph tracing:
 The Co-DETR neural network graph is traced via [`torch.export.export`](https://pytorch.org/docs/stable/export.html#torch.export.export) to yield an Export Intermediate Representation (IR) (`torch.export.ExportedProgram`) that bundles the computational graph (`torch.fx.GraphModule`), the graph signature specifying the parameters and buffer names used and mutated within the graph, and the parameters and weights of the model. The tracing process removes all Python control flow and data structures, and recasts the computation as a series of functional [ATen operators](https://pytorch.org/executorch/stable/ir-ops-set-definition.html).
 
-* References:
-  * https://pytorch.org/docs/stable/export.ir_spec.html
-  * https://pytorch.org/cppdocs/
+
+References:
+- https://pytorch.org/docs/stable/export.ir_spec.html
+- https://pytorch.org/cppdocs/
 
 ### 2. TorchDynamo compilation to TensorRT:
 The traced IR graph is compiled to TensorRT via [`torch_tensorrt.dynamo.compile`](https://pytorch.org/TensorRT/py_api/dynamo.html). The [torch_tensorrt](https://pytorch.org/TensorRT/) library uses the [TorchDynamo](https://pytorch.org/docs/stable/torch.compiler_dynamo_overview.html) compiler to replace Pytorch ATen operators in the traced graph with equivalent TensorRT operators. Operators unsupported in TensorRT are left as Pytorch ATen operators, resulting a hybrid graph composed on Pytorch ATen and TensorRT subgraphs. The TensorRT-compatible subgraphs are optimized and executed using TensorRT, while the remaining parts are handled by PyTorch's native execution. In general, a model fully compiled to TensorRT operators will achieve better performance. To enable full TensorRT compilation of Co-DETR, I implemented a [C++ TensorRT Plugin for the Multi-Scale Deformable Attention operator](codetr/csrc/deformable_attention_plugin.cpp) and a [dynamo_tensorrt_converter wrapper](codetr/csrc/deformable_attention_plugin.cpp). 
 
 The compiled Co-DETR TensorRT model can be saved to disk as a [TorchScript](https://pytorch.org/docs/stable/jit.html) model via [`torch_tensorrt.save`](https://pytorch.org/TensorRT/py_api/torch_tensorrt.html?highlight=save#torch_tensorrt.save). The TorchScript can be standalone executed in Python or C++.
 
-Alternatively, the Co-DETR TensorRT model can be serialized to a TensorRT engine via `torch_tensorrt.dynamo.convert_exported_program_to_serialized_trt_engine` and saved to disk as a binary file. The serialized TensorRT engine can be run natively with TensorRT in Python or C++. 
-
-* References
-  * https://github.com/pytorch/TensorRT
-  * https://pytorch.org/docs/stable/torch.compiler.html
-  * https://pytorch.org/TensorRT/contributors/dynamo_converters.html
+Furthermore, the Co-DETR TensorRT model can be serialized to a TensorRT engine via `torch_tensorrt.dynamo.convert_exported_program_to_serialized_trt_engine` and saved to disk as a binary file. The serialized TensorRT engine can be run natively with TensorRT in Python or C++. 
 
 
-### Co-DETR inference runtime is sped up over 4x (relative to Pytorch FP32) when executing the TensorRT FP16 compiled model
+References
+* https://github.com/pytorch/TensorRT
+* https://pytorch.org/docs/stable/torch.compiler.html
+* https://pytorch.org/TensorRT/contributors/dynamo_converters.html
+
+
+### 4x Inference Runtime Improvement (relative to Pytorch FP32) when executing the TensorRT float16 compiled Co-DETR model
 
 All benchmarking is performed on an Nvidia RTX 4090 GPU.
 
@@ -177,28 +179,6 @@ Note
 
 
 
-
-
-
-
-
-
-////
-
-Large Scale Jittering Configuration
-In the context of this DINO (DETR with Improved deNoising anchOr boxes) object detection model configuration, use_lsj=True enables Large Scale Jittering (LSJ) as a data augmentation technique.
-
-Large Scale Jittering is an advanced augmentation strategy that randomly resizes training images within a much wider range than traditional resizing methods. While standard augmentation might resize images within a limited range (e.g., 0.8-1.2× original size), LSJ typically applies more aggressive scaling (often 0.1-2.0× original size).
-
-This technique is particularly beneficial for:
-
-Improving model robustness to scale variations
-Enhancing detection performance on objects of varying sizes
-Reducing overfitting by creating more diverse training examples
-LSJ has become a standard technique in modern object detection frameworks, especially when training transformer-based models like DINO on the COCO dataset, as indicated by the filename of this configuration.
-
-
-
 # Deferent from the DINO, we use the NMS.
 
 
@@ -267,27 +247,6 @@ https://pytorch.org/TensorRT/contributors/dynamo_converters.html
 * unfortunately didn't provide a fulle xample
 *  torch_tensorrt dynamo/conversion library https://github.com/pytorch/TensorRT/tree/v2.6.0/py/torch_tensorrt/dynamo/conversion
 
-
-# Inference time speed-up
-
-Not including the post-processing code
-```
-PyTorch implementation:
-  50.77 ms
-  1 measurement, 10 runs , 1 thread
-TensorRT implementation:
-  36.56 ms
-  1 measurement, 100 runs , 1 thread
-TensorRT speedup: 1.39x 
-```
-
-C++
-```
-TorchScript: 
-Average inference time: 36.46ms
-TensorRT:
-Average inference time: 36.50ms
-```
 
 # Inspecting the engine file
 
