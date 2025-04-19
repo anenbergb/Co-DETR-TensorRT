@@ -36,7 +36,7 @@ All benchmarking is performed on an Nvidia RTX 4090 GPU.
 
 The TensorRT FP16 runtimes are the mean GPU compute times reported using `trtexec` with 100 iterations and `--useSpinWait --useCudaGraph` options.
 I recorded slightly longer runtimes of 99.1ms, 36.6ms, and 16.8ms when benchmarking with the `codetr_inference.cpp` script.
-Check out the trtexec section for more information on inference runtime benchmarking.
+Check out the "Benchmarking with trtexec" section in this README for more information on inference runtime benchmarking.
 
 Note that the Swin-L backbone downscales by a factor of 32x
 
@@ -174,42 +174,121 @@ Note
 * The Co-DETR model is exported to TensorRT with a fixed input height and width because exporting with dynamic shapes takes an extremely long time. You can read more about dynamic shapes with Torch-TensorRT [here](https://pytorch.org/TensorRT/user_guide/dynamic_shapes.html).
 * The Swin Transformer backbone downscales the input image by a factor of 32x.
 
+The `/workspace/output` directory will look like
+
+<img src="https://github.com/user-attachments/assets/6171aa55-f7f0-4fe2-8422-e8bdd47831a9" width="300"/>
+
+### Results: PyTorch (python) vs. TensorRT (python) detections vs. TensorRT (C++) detections
+<img src="https://github.com/user-attachments/assets/1b1529be-df73-4b4d-8ff6-c5a4ac4c7a05" width="300"/>
+<img src="https://github.com/user-attachments/assets/e2054c85-aeb3-44fd-af29-3c440ab7e95a" width="300"/>
+<img src="https://github.com/user-attachments/assets/85de858f-3734-48a1-927c-99b872f730af" width="300"/>
+
+# Benchmarking with trtexec
+
+The TensorRT inference runtime can be benchmarked using `trtexec`
+```
+LD_PRELOAD=./codetr/csrc/build/libdeformable_attention_plugin.so \
+trtexec \
+--loadEngine=/workspace/output/codetr.engine \
+--fp16 --useSpinWait --useCudaGraph \
+--iterations=100 --warmUp=500 --avgRuns=100  \
+> /workspace/output/trtexec-benchmark.log 2>&1
+```
+The runtime performance is summarized at the bottom of the output log
+```
+...
+[04/11/2025-15:15:48] [I] TensorRT version: 10.7.0
+[04/11/2025-15:15:48] [I] Loading standard plugins
+[04/11/2025-15:15:48] [I] [TRT] Loaded engine size: 472 MiB
+[04/11/2025-15:15:48] [I] Engine deserialized in 0.212037 sec.
+[04/11/2025-15:15:48] [I] [TRT] [MS] Running engine with multi stream info
+[04/11/2025-15:15:48] [I] [TRT] [MS] Number of aux streams is 3
+[04/11/2025-15:15:48] [I] [TRT] [MS] Number of total worker streams is 4
+[04/11/2025-15:15:48] [I] [TRT] [MS] The main stream provided by execute/enqueue calls is the first worker stream
+[04/11/2025-15:15:48] [I] [TRT] [MemUsageChange] TensorRT-managed allocation in IExecutionContext creation: CPU +0, GPU +1025, now: CPU 0, GPU 1484 (MiB)
+[04/11/2025-15:15:48] [I] Setting persistentCacheLimit to 0 bytes.
+[04/11/2025-15:15:48] [I] Created execution context with device memory size: 1024.62 MiB
+[04/11/2025-15:15:48] [I] Using random values for input batch_inputs
+[04/11/2025-15:15:48] [I] Input binding for batch_inputs with dimensions 1x3x768x1152 is created.
+[04/11/2025-15:15:48] [I] Using random values for input img_masks
+[04/11/2025-15:15:48] [I] Input binding for img_masks with dimensions 1x768x1152 is created.
+[04/11/2025-15:15:48] [I] Output binding for output0 with dimensions 1x300x4 is created.
+[04/11/2025-15:15:48] [I] Output binding for output1 with dimensions 1x300 is created.
+[04/11/2025-15:15:48] [I] Output binding for output2 with dimensions 1x300 is created.
+[04/11/2025-15:15:48] [I] Starting inference
+[04/11/2025-15:15:48] [I] Capturing CUDA graph for the current execution context
+[04/11/2025-15:15:48] [I] Successfully captured CUDA graph for the current execution context
+[04/11/2025-15:15:52] [I] Warmup completed 14 queries over 500 ms
+[04/11/2025-15:15:52] [I] Timing trace has 101 queries over 3.08403 s
+[04/11/2025-15:15:52] [I] 
+[04/11/2025-15:15:52] [I] === Trace details ===
+[04/11/2025-15:15:52] [I] Trace averages of 100 runs:
+[04/11/2025-15:15:52] [I] Average on 100 runs - GPU latency: 30.211 ms - Host latency: 30.8067 ms (enqueue 0.00390778 ms)
+[04/11/2025-15:15:52] [I] 
+[04/11/2025-15:15:52] [I] === Performance summary ===
+[04/11/2025-15:15:52] [I] Throughput: 32.7494 qps
+[04/11/2025-15:15:52] [I] Latency: min = 30.7003 ms, max = 31.6415 ms, mean = 30.8066 ms, median = 30.7695 ms, percentile(90%) = 30.8008 ms, percentile(95%) = 31.1944 ms, percentile(99%) = 31.5444 ms
+[04/11/2025-15:15:52] [I] Enqueue Time: min = 0.00305176 ms, max = 0.0141602 ms, mean = 0.00393677 ms, median = 0.00360107 ms, percentile(90%) = 0.00494385 ms, percentile(95%) = 0.00585938 ms, percentile(99%) = 0.00842285 ms
+[04/11/2025-15:15:52] [I] H2D Latency: min = 0.5896 ms, max = 0.614014 ms, mean = 0.590921 ms, median = 0.590332 ms, percentile(90%) = 0.591431 ms, percentile(95%) = 0.592529 ms, percentile(99%) = 0.602051 ms
+[04/11/2025-15:15:52] [I] GPU Compute Time: min = 30.1056 ms, max = 31.0457 ms, mean = 30.2108 ms, median = 30.1722 ms, percentile(90%) = 30.2061 ms, percentile(95%) = 30.6002 ms, percentile(99%) = 30.9484 ms
+[04/11/2025-15:15:52] [I] D2H Latency: min = 0.00390625 ms, max = 0.00634766 ms, mean = 0.00490275 ms, median = 0.00463867 ms, percentile(90%) = 0.00585938 ms, percentile(95%) = 0.00598145 ms, percentile(99%) = 0.00628662 ms
+[04/11/2025-15:15:52] [I] Total Host Walltime: 3.08403 s
+[04/11/2025-15:15:52] [I] Total GPU Compute Time: 3.05129 s
+```
+Runtime measurement definitions:
+* GPU Compute Time: the GPU latency to execute the kernels for a query.
+* Total GPU Compute Time: the summation of the GPU Compute Time of all the queries.
+* Enqueue Time: the host latency to enqueue a query. If this is longer than GPU Compute Time, the GPU may be under-utilized.
+* H2D Latency: the latency for host-to-device data transfers for input tensors of a single query.
+* D2H Latency: the latency for device-to-host data transfers for output tensors of a single query.
+* Latency: the summation of H2D Latency, GPU Compute Time, and D2H Latency of a single query. Lower latency is better.
+* Throughput: how many inferences can be completed in a fixed time. Higher throughput is better. Higher throughput reflects a more efficient utilization of fixed compute resources. 
+
+# Profiling with trtexec and NVIDIA Nsight Systems
+
+[NVIDIA Nsight Systems](https://developer.nvidia.com/nsight-systems) can be used to profile the Co-DETR TensorRT engine execution. TensorRT uses [NVIDIA Took Extension SDK (NVTX)](https://docs.nvidia.com/nsight-visual-studio-edition/2020.1/nvtx/index.html) to record the start and stop timestamps for each layer. By prefixing the `trtexec` command with `nsys profile`, we can record the timing events and to a log file for visualization and analysis in the Nsight Systems application.
+
+```
+LD_LIBRARY_PATH=/home/bryan/src/libtorch/lib:/home/bryan/src/TensorRT-10.7.0.23/lib:$LD_LIBRARY_PATH \
+LD_PRELOAD=./codetr/csrc/build/libdeformable_attention_plugin.so  \
+nsys profile -o nsys_profiler \
+--capture-range cudaProfilerApi --cuda-memory-usage=true \
+trtexec \
+--loadEngine=codetr.engine \
+--fp16 \
+--iterations=100 --warmUp=500 --avgRuns=100 --useSpinWait
+```
+(`nsys` isn't installed in the Docker image. I ran `nsys` on my local PC.)
+
+then run
+```
+> nsight-sys
+```
+![nsight-systems-kernel-summary](https://github.com/user-attachments/assets/d5af891e-db99-4947-b9f2-d216a45652f3)
+
+In Nsight Systems, you can open the `nsys_profiler.nsys-rep` file to visualize `trtexec` execution and trace TensorRT kernel calls. In the Timeline View, a single `ExecutionContext::enqueue` call (which runs the Co-DETR model) took 32.772 ms. The Stats panel’s CUDA GPU Kernel Summary shows detailed timing, where the `codetr::ms_deformable_im2col_gpu_kernel`—the core of the multiscale deformable attention operator—averaged 368.936 µs per inference, accounting for 6.0% of the total runtime.
+
+If `trtexec` is run with `--useCudaGraph` then the the first enqueue will capture the CUDA graph (including all kernels, memory transfers, etc) and subsequent iterations will be extremely fast. In this case `--cuda-graph-trace=node` flag should be added to the nsys command to see the per-kernel runtime information.
 
 
+By default, TensorRT only shows layer names in the NVTX markers. torch_tensorrt builds the TensorRT engine with profiling verbosity set to ProfilingVerbosity::kLAYER_NAMES_ONLY, which records the layer names, execution time per layer, and layer order in the engine. Unfortunately torch_tensorrt compilation doesn't provide an option to build the engine with ProfilingVerbosity::kDETAILED which would expose detailed layer information including tensor input/output names, shapes and data types, tensor formats, chosen tactics, and memory usage per layer.
 
 
-
-# Deferent from the DINO, we use the NMS.
-
-
-TensorRT requires static output shapes so the score thresholding and nms have to be moved outside of the model and left as post-processing steps
-
-
-The Pytorch model is compiled to TensorRT with fallback eneabled `require_full_compilation=False` because some operations, namely the multiscale_deformable_attention CUDA operator cannot be run in TensorRT.
-
-PyTorch fallback means the compiled model becomes a hybrid execution engine where:
-1. Supported operations run in TensorRT for acceleration
-2. Unsupported operations run in the original PyTorch framework
-
-How It Works
-1. Graph Partitioning: During compilation, your model is analyzed and split into subgraphs:
-* TensorRT-compatible subgraphs get compiled to optimized TensorRT engines
-* Incompatible operations remain as PyTorch code
-
-2. Runtime Flow:
-```Input → TensorRT Subgraph → PyTorch Subgraph → TensorRT Subgraph → ... → Output```
-
-3. Engine Transitions: Data moves between TensorRT and PyTorch execution contexts automatically
-
-Drawbacks from hybrid execution
-1. Each transition between PyTorch and TensorRT has overhead
-2. Less optimization than a fully TensorRT-compiled model
-3.  Some acceleration benefits might be reduced by frequent context switches
+References
+* https://docs.nvidia.com/deeplearning/tensorrt/latest/performance/best-practices.html#performance-benchmarking-using-trtexec
+* NVTX https://docs.nvidia.com/nsight-visual-studio-edition/2020.1/nvtx/index.html
+* NVTX Trace https://docs.nvidia.com/nsight-systems/UserGuide/index.html#nvtx-trace
 
 
-The result of Torch -> TensorRT compilation is a "hybrid execution engine" composed of an alternating pattern of TorchTensorRTModule and GraphModule. The 
+# [Developer Tips] - 
 
+# Resources and References
 
+References for Pytorch C++ CUDA extensions
+- https://pytorch.org/tutorials/advanced/cpp_custom_ops.html#cpp-custom-ops-tutorial
+- https://github.com/pytorch/vision/tree/main/torchvision/csrc
+
+- 
 
 # Implementing a TensorRT Custom Operator
 
@@ -279,103 +358,8 @@ LD_PRELOAD=/home/bryan/src/Co-DETR-TensorRT/codetr/csrc/build/libdeformable_atte
 
 
 
-[NVIDIA Nsight Systems](https://developer.nvidia.com/nsight-systems) can be used to profile the Co-DETR TensorRT engine execution. TensorRT uses [NVIDIA Took Extension SDK (NVTX)](https://docs.nvidia.com/nsight-visual-studio-edition/2020.1/nvtx/index.html) to record the start and stop timestamps for each layer. By prefixing the `trtexec` command with `nsys profile`, we can record the timing events and to a log file for visualization and analysis in the Nsight Systems application.
-
-```
-LD_LIBRARY_PATH=/home/bryan/src/libtorch/lib:/home/bryan/src/TensorRT-10.7.0.23/lib:$LD_LIBRARY_PATH \
-LD_PRELOAD=/home/bryan/src/Co-DETR-TensorRT/codetr/csrc/build/libdeformable_attention_plugin.so \
-nsys profile -o /home/bryan/expr/co-detr/export/codetr_fp16/nsys_profiler \
---capture-range cudaProfilerApi --cuda-memory-usage=true \
-./trtexec \
---loadEngine=/home/bryan/expr/co-detr/export/codetr_fp16/codetr.engine \
---fp16 \
---iterations=100 --warmUp=500 --avgRuns=100 --useSpinWait
-```
-
-then run
-```
-> nsight-sys
-```
-
-In Nsight Systems, you can open the `nsys_profiler.nsys-rep` file to visualize `trtexec` execution and trace TensorRT kernel calls. In the Timeline View, a single `ExecutionContext::enqueue` call (which runs the Co-DETR model) took 32.772 ms. The Stats panel’s CUDA GPU Kernel Summary shows detailed timing, where the `codetr::ms_deformable_im2col_gpu_kernel`—the core of the multiscale deformable attention operator—averaged 368.936 µs per inference, accounting for 6.0% of the total runtime.
 
 
-If `trtexec` is run with `--useCudaGraph` then the the first enqueue will capture the CUDA graph (including all kernels, memory transfers, etc) and subsequent iterations will be extremely fast. In this case `--cuda-graph-trace=node` flag should be added to the nsys command to see the per-kernel runtime information.
-
-
-By default, TensorRT only shows layer names in the NVTX markers.
-// torch_tensorrt builds the TensorRT engine with profiling verbosity set to ProfilingVerbosity::kLAYER_NAMES_ONLY, which records the layer names, execution time per layer, and layer order in the engine. Unfortunately torch_tensorrt compilation doesn't provide an option to build the engine with ProfilingVerbosity::kDETAILED which would expose detailed layer information including tensor input/output names, shapes and data types, tensor formats, chosen tactics, and memory usage per layer.
-
-
-With Nsight Systems can 
-
-NVTX
-* https://docs.nvidia.com/nsight-visual-studio-edition/2020.1/nvtx/index.html
-NVTX Trace
-* https://docs.nvidia.com/nsight-systems/UserGuide/index.html#nvtx-trace
-
-
-
-NVTX GPU Projection Summary
-
-
-
-Observations for the (1152, 768) model
-[TRT] Loaded engine size: 472 MiB
-Engine deserialized in 0.217118 sec.
-Average on 100 runs - GPU latency: 33.3955 ms - Host latency: 34.0781 ms (enqueue 33.2959 ms)
-
-GPU Compute Time: the GPU latency to execute the kernels for a query.
-Total GPU Compute Time: the summation of the GPU Compute Time of all the queries. Notice that the Total GPU Compute Time: 3.33955 s is nearly equal to the Total Host Walltime of 3.34036 s, which indicates that the GPU is not under-utilized because of host-side overheads or data transfers.
-Enqueue Time: the host latency to enqueue a query. If this is longer than GPU Compute Time, the GPU may be under-utilized.
-H2D Latency: the latency for host-to-device data transfers for input tensors of a single query.
-D2H Latency: the latency for device-to-host data transfers for output tensors of a single query.
-Latency: the summation of H2D Latency, GPU Compute Time, and D2H Latency. This is the latency to infer a single query.
-* How much time elapses from an input presented to the network until an output is available. This is the latency of the network for a single inference. Lower latencies are better.
-Throughput: Another performance measurement is how many inferences can be completed in a fixed time. This is the throughput of the network. Higher throughput is better. Higher throughputs indicate a more efficient utilization of fixed compute resources. 
-
-
-
-
-```
-[04/11/2025-15:15:48] [I] TensorRT version: 10.7.0
-[04/11/2025-15:15:48] [I] Loading standard plugins
-[04/11/2025-15:15:48] [I] [TRT] Loaded engine size: 472 MiB
-[04/11/2025-15:15:48] [I] Engine deserialized in 0.212037 sec.
-[04/11/2025-15:15:48] [I] [TRT] [MS] Running engine with multi stream info
-[04/11/2025-15:15:48] [I] [TRT] [MS] Number of aux streams is 3
-[04/11/2025-15:15:48] [I] [TRT] [MS] Number of total worker streams is 4
-[04/11/2025-15:15:48] [I] [TRT] [MS] The main stream provided by execute/enqueue calls is the first worker stream
-[04/11/2025-15:15:48] [I] [TRT] [MemUsageChange] TensorRT-managed allocation in IExecutionContext creation: CPU +0, GPU +1025, now: CPU 0, GPU 1484 (MiB)
-[04/11/2025-15:15:48] [I] Setting persistentCacheLimit to 0 bytes.
-[04/11/2025-15:15:48] [I] Created execution context with device memory size: 1024.62 MiB
-[04/11/2025-15:15:48] [I] Using random values for input batch_inputs
-[04/11/2025-15:15:48] [I] Input binding for batch_inputs with dimensions 1x3x768x1152 is created.
-[04/11/2025-15:15:48] [I] Using random values for input img_masks
-[04/11/2025-15:15:48] [I] Input binding for img_masks with dimensions 1x768x1152 is created.
-[04/11/2025-15:15:48] [I] Output binding for output0 with dimensions 1x300x4 is created.
-[04/11/2025-15:15:48] [I] Output binding for output1 with dimensions 1x300 is created.
-[04/11/2025-15:15:48] [I] Output binding for output2 with dimensions 1x300 is created.
-[04/11/2025-15:15:48] [I] Starting inference
-[04/11/2025-15:15:48] [I] Capturing CUDA graph for the current execution context
-[04/11/2025-15:15:48] [I] Successfully captured CUDA graph for the current execution context
-[04/11/2025-15:15:52] [I] Warmup completed 14 queries over 500 ms
-[04/11/2025-15:15:52] [I] Timing trace has 101 queries over 3.08403 s
-[04/11/2025-15:15:52] [I] 
-[04/11/2025-15:15:52] [I] === Trace details ===
-[04/11/2025-15:15:52] [I] Trace averages of 100 runs:
-[04/11/2025-15:15:52] [I] Average on 100 runs - GPU latency: 30.211 ms - Host latency: 30.8067 ms (enqueue 0.00390778 ms)
-[04/11/2025-15:15:52] [I] 
-[04/11/2025-15:15:52] [I] === Performance summary ===
-[04/11/2025-15:15:52] [I] Throughput: 32.7494 qps
-[04/11/2025-15:15:52] [I] Latency: min = 30.7003 ms, max = 31.6415 ms, mean = 30.8066 ms, median = 30.7695 ms, percentile(90%) = 30.8008 ms, percentile(95%) = 31.1944 ms, percentile(99%) = 31.5444 ms
-[04/11/2025-15:15:52] [I] Enqueue Time: min = 0.00305176 ms, max = 0.0141602 ms, mean = 0.00393677 ms, median = 0.00360107 ms, percentile(90%) = 0.00494385 ms, percentile(95%) = 0.00585938 ms, percentile(99%) = 0.00842285 ms
-[04/11/2025-15:15:52] [I] H2D Latency: min = 0.5896 ms, max = 0.614014 ms, mean = 0.590921 ms, median = 0.590332 ms, percentile(90%) = 0.591431 ms, percentile(95%) = 0.592529 ms, percentile(99%) = 0.602051 ms
-[04/11/2025-15:15:52] [I] GPU Compute Time: min = 30.1056 ms, max = 31.0457 ms, mean = 30.2108 ms, median = 30.1722 ms, percentile(90%) = 30.2061 ms, percentile(95%) = 30.6002 ms, percentile(99%) = 30.9484 ms
-[04/11/2025-15:15:52] [I] D2H Latency: min = 0.00390625 ms, max = 0.00634766 ms, mean = 0.00490275 ms, median = 0.00463867 ms, percentile(90%) = 0.00585938 ms, percentile(95%) = 0.00598145 ms, percentile(99%) = 0.00628662 ms
-[04/11/2025-15:15:52] [I] Total Host Walltime: 3.08403 s
-[04/11/2025-15:15:52] [I] Total GPU Compute Time: 3.05129 s
-```
 
 
 # Dev
@@ -391,8 +375,4 @@ black codetr
 clang-format -i <path-to-C++-file>
 ```
 
-# Resources and References
 
-References for Pytorch C++ CUDA extensions
-- https://pytorch.org/tutorials/advanced/cpp_custom_ops.html#cpp-custom-ops-tutorial
-- https://github.com/pytorch/vision/tree/main/torchvision/csrc
