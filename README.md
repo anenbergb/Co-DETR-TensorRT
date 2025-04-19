@@ -280,98 +280,63 @@ References
 * NVTX Trace https://docs.nvidia.com/nsight-systems/UserGuide/index.html#nvtx-trace
 
 
-# [Developer Tips] - 
+# [Developer Tips] - PyTorch C++ CUDA Extensions
+The C++ CUDA implementation [codetr/csrc/ms_deform_attn.cu](codetr/csrc/ms_deform_attn.cu) of the multi-scale deformable attention operator (a key component to the Deformable DETR architecture) is registered with PyTorch using the `TORCH_LIBRARY` macro. It is important to define the `TORCH_LIBRARY` registration in a separate file [codetr/csrc/deformable_attention_torch.cpp](codetr/csrc/deformable_attention_torch.cpp) to avoid polluting the C++ CUDA definition [codetr/csrc/ms_deform_attn.cu](codetr/csrc/ms_deform_attn.cu) with a `#include <torch/library.h>` import.
 
-# Resources and References
+To add `torch.compile` support for the newly registered `codetr::multi_scale_deformable_attention` operator, we must add a FakeTensor kernel (also known as a "meta kernel" or "abstract impl"). FakeTensors are Tensors that have metadata (such as shape, dtype, device) but no data: the FakeTensor kernel for an operator specifies how to compute the metadata of output tensors given the metadata of input tensors. See [`def _multi_scale_deformable_attention_fake()` in codetr/ops.py](codetr/ops.py) for the specifics.
 
-References for Pytorch C++ CUDA extensions
+See the [setup.py](setup.py) for how to build the C++ CUDA Extension.
+
+References
 - https://pytorch.org/tutorials/advanced/cpp_custom_ops.html#cpp-custom-ops-tutorial
 - https://github.com/pytorch/vision/tree/main/torchvision/csrc
 
-- 
 
-# Implementing a TensorRT Custom Operator
+# [Developer Tips] - Implementing a TensorRT Custom Operator
+Registering the custom C++ CUDA operator enables us to run Co-DETR in python. However, when the model is compiled to TensorRT (via `torch.compile(model, backend="tensorrt")`) we find that the compiled graph contains an alternating pattern of TorchTensorRTModule and GraphModules. `torch.compile` doesn't know how to convert our custom operator `codetr::multi_scale_deformable_attention` to TensorRT, so it is executed in PyTorch, which results in a hybrid execution graph. Switching between TensorRT and PyTorch execution slows down inference time substantially.
 
-* https://docs.nvidia.com/deeplearning/tensorrt/latest/inference-library/extending-custom-layers.html
+To enable full TensorRT compilation, we have to implement a TensorRT C++ Custom Plugin (`DeformableAttentionPlugin`) and register it with torch dynamo so that Torch-TensorRT can replace the `codetr::multi_scale_deformable_attention` operator with the `DeformableAttentionPlugin` at `torch.compile` time. 
+
+The following three steps to implement and register a TensorRT C++ Custom Plugin are defined in [codetr/csrc/deformable_attention_plugin.cpp](codetr/csrc/deformable_attention_plugin.cpp).
+1. Implement a plugin class (`DeformableAttentionPlugin`) derived from TensorRT’s plugin base classes (`IPluginV3`, `IPluginV3OneCore`, `IPluginV3OneBuild`, `IPluginV3OneRuntime`).
+2. Implement a plugin creator class (`DeformableAttentionPluginCreator`) tied to our plugin class by deriving from TensorRT’s plugin creator base class (`IPluginCreatorV3One`).
+3. Register the plugin creator class with TensorRT’s plugin registry (`REGISTER_TENSORRT_PLUGIN(DeformableAttentionPluginCreator);`)
+
+The `DeformableAttentionPlugin` class is registered with torch dynamo in [codetr/ops.py](codetr/ops.py).
+```
+@torch_tensorrt.dynamo.conversion.dynamo_tensorrt_converter(torch.ops.codetr.multi_scale_deformable_attention.default)
+def multi_scale_deformable_attention_converter(
+    ctx: torch_tensorrt.dynamo.conversion.ConversionContext,
+    target: Target,
+    args: Tuple[Argument, ...],
+    kwargs: Dict[str, Argument],
+    name: str,
+) -> trt.ITensor:
+```
+
+References:
+* A useful guide providing examples for IPluginV3 and IPluginV3OneBuild https://docs.nvidia.com/deeplearning/tensorrt/latest/inference-library/extending-custom-layers.html
 * https://github.com/leimao/TensorRT-Custom-Plugin-Example
+* https://github.com/NVIDIA/TensorRT/tree/release/10.0/samples/python/python_plugin
+* Example plugins https://github.com/NVIDIA/TensorRT/tree/main/plugin#tensorrt-plugins
+
+Documentation
+* TensorRT python API documentation https://docs.nvidia.com/deeplearning/tensorrt/latest/_static/python-api/index.html
+* TensorRT C++ Documentation https://docs.nvidia.com/deeplearning/tensorrt/latest/_static/c-api/index.html
+* TensorRT C++ Documentation https://docs.nvidia.com/deeplearning/tensorrt/latest/inference-library/c-api-docs.html
+
+Dynamo References
 * https://pytorch.org/TensorRT/tutorials/_rendered_examples/dynamo/custom_kernel_plugins.html
 * https://pytorch.org/TensorRT/contributors/dynamo_converters.html
-* https://github.com/NVIDIA/TensorRT/tree/release/10.0/samples/python/python_plugin
-
-Example plugins
-* https://github.com/NVIDIA/TensorRT/tree/main/plugin#tensorrt-plugins
-
-
-There are four steps to ensure that TensorRT properly recognizes your plugin:
-
-1. Implement a plugin class from one of TensorRT’s plugin base classes. Currently, the only recommended one is IPluginV3.
-2. Implement a plugin creator class tied to your class by deriving from one of TensorRT’s plugin creator-based classes. Currently, the only recommended one is IPluginCreatorV3One.
-3. Register an instance of the plugin creator class with TensorRT’s plugin registry.
-4. Add an instance of the plugin class to a TensorRT network by directly using TensorRT’s network APIs
-
-
-
-https://docs.nvidia.com/deeplearning/tensorrt/latest/inference-library/extending-custom-layers.html
-* Very useful guide providing examples for IPluginV3 adn IPluginV3OneBuild
-https://docs.nvidia.com/deeplearning/tensorrt/latest/_static/python-api/index.html
-* TensorRT python API documentation
-
-TensorRT C++ Documentation
-* https://docs.nvidia.com/deeplearning/tensorrt/latest/_static/c-api/index.html
-* https://docs.nvidia.com/deeplearning/tensorrt/latest/inference-library/c-api-docs.html
-
-
-# Writing Dynamo Converters
-https://pytorch.org/TensorRT/contributors/dynamo_converters.html
-* unfortunately didn't provide a fulle xample
 *  torch_tensorrt dynamo/conversion library https://github.com/pytorch/TensorRT/tree/v2.6.0/py/torch_tensorrt/dynamo/conversion
 
 
-# Inspecting the engine file
-
-TensorRT performance benchmarking with trtexec
-* https://docs.nvidia.com/deeplearning/tensorrt/latest/performance/best-practices.html#performance-benchmarking-using-trtexec
-
-
-// doesn't need the libtorch path apparently?
-LD_LIBRARY_PATH=/home/bryan/src/libtorch/lib:/home/bryan/src/TensorRT-10.7.0.23/lib:$LD_LIBRARY_PATH \
-LD_PRELOAD=/home/bryan/src/Co-DETR-TensorRT/codetr/csrc/build/libdeformable_attention_plugin.so \
-./trtexec \
---loadEngine=/home/bryan/expr/co-detr/export/codetr_fp16/codetr.engine \
---fp16 --useSpinWait --useCudaGraph \
---iterations=100 --warmUp=500 --avgRuns=100  \
-> /home/bryan/expr/co-detr/export/codetr_fp16/trtexec07-benchmark-no-spin-cuda-graph.log 2>&1
-
-
-
-
-
---dumpProfile  \
-
-
-
---dumpLayerInfo --verbose  > trtexec01.log
---iterations=100 --warmUp=10 --avgRuns=100 --useSpinWait --useCudaGraph > trtexec02-benchmark.log
---dumpProfile --dumpLayerInfo --dumpOptimizationProfile  > trtexec03-benchmark.log
---dumpOptimizationProfile > trtexec04-benchmark.log 
---dumpLayerInfo > trtexec05-layerinfo.log # prints all the multiplies, etc with layers
-
-
-
-
-
-
-
-# Dev
+# [Developer Tips] - code formatting
 
 ```
 isort codetr
 flake8 codetr
 black codetr
-```
-
-
-```
 clang-format -i <path-to-C++-file>
 ```
 
