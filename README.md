@@ -1,4 +1,4 @@
-# Co-DETR to TensorRT
+# Co-DETR (Detection Transformer) compiled from PyTorch to TensorRT
 This repository presents a refactored implementation of the [open-mmlab/mmdetection](https://github.com/open-mmlab/mmdetection/tree/main/projects/CO-DETR) Co-DETR object detection neural network architecture to enable export and compilation from [Pytorch](https://pytorch.org/) to [NVIDIA's TensorRT Deep Learning Optimization and Runtime framework](https://developer.nvidia.com/tensorrt).
 
 Compiliation from Pytorch to TensorRT is accomplished in two steps
