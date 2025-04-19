@@ -314,45 +314,6 @@ public:
     int num_levels = sampling_loc_dims.d[3];
     int num_points = sampling_loc_dims.d[4];
 
-    // Helper function to map DataType to string
-    auto dataTypeToString = [](nvinfer1::DataType type) -> std::string {
-      switch (type) {
-      case nvinfer1::DataType::kFLOAT:
-        return "float32";
-      case nvinfer1::DataType::kHALF:
-        return "float16";
-      case nvinfer1::DataType::kINT32:
-        return "int32";
-      case nvinfer1::DataType::kINT64:
-        return "int64";
-      default:
-        return "unknown";
-      }
-    };
-    // Log tensor shapes for debugging
-    std::stringstream ss;
-    ss << "DeformableAttentionPlugin::enqueue: " << std::endl
-       << "  value shape: (" << bs << ", " << num_keys << ", " << num_heads << ", " << dim_per_head << ")" << std::endl
-       << "  sampling_loc shape: (" << bs << ", " << num_queries << ", " << num_heads << ", " << num_levels << ", "
-       << num_points << ", 2)" << std::endl
-       << "  attn_weight shape: (" << bs << ", " << num_queries << ", " << num_heads << ", " << num_levels << ", "
-       << num_points << ")" << std::endl
-       << "  output shape: (" << bs << ", " << num_queries << ", " << num_heads * dim_per_head << ")" << std::endl
-       << "  nullptr checks: " << std::endl
-       << "  inputs[0]: " << (inputs[0] == nullptr ? "true" : "false")
-       << ", dtype: " << dataTypeToString(inputDesc[0].type) << std::endl
-       << "  inputs[1]: " << (inputs[1] == nullptr ? "true" : "false")
-       << " dtype: " << dataTypeToString(inputDesc[1].type) << std::endl
-       << "  inputs[2]: " << (inputs[2] == nullptr ? "true" : "false")
-       << " dtype: " << dataTypeToString(inputDesc[2].type) << std::endl
-       << "  inputs[3]: " << (inputs[3] == nullptr ? "true" : "false")
-       << " dtype: " << dataTypeToString(inputDesc[3].type) << std::endl
-       << "  inputs[4]: " << (inputs[4] == nullptr ? "true" : "false")
-       << " dtype: " << dataTypeToString(inputDesc[4].type) << std::endl
-       << "  outputs[0]: " << (outputs[0] == nullptr ? "true" : "false")
-       << " dtype: " << dataTypeToString(outputDesc[0].type) << std::endl;
-    logVerbose(ss.str().c_str());
-
     DataType dtype = inputDesc[0].type;
 
     at::ScalarType scalar_type;
